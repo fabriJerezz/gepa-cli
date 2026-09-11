@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"gepa-cli/internal/api"
 	"gepa-cli/internal/store"
@@ -202,7 +203,19 @@ func runServe(s *store.Store, args []string) error {
 	}
 	handler := api.NewServer(s, instanceName())
 	fmt.Printf("escuchando en %s (instancia %q)\n", addr, instanceName())
-	return http.ListenAndServe(addr, handler)
+
+	// No usamos http.ListenAndServe directo porque no permite configurar
+	// timeouts: un cliente lento (o malicioso) podría dejar conexiones
+	// abiertas indefinidamente y agotar los file descriptors del proceso
+	// (Slowloris). ReadHeaderTimeout corta esa ventana.
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
 // instanceName identifica a esta instancia frente a las demás cuando corren

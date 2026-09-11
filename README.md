@@ -1,5 +1,8 @@
 # gepa-cli
 
+[![CI](https://github.com/fabriJerezz/gepa-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/fabriJerezz/gepa-cli/actions/workflows/ci.yml)
+[![SAST](https://github.com/fabriJerezz/gepa-cli/actions/workflows/sast.yml/badge.svg)](https://github.com/fabriJerezz/gepa-cli/actions/workflows/sast.yml)
+
 - gestionador de partidos
 
 CLI simple en Go para administrar **jugadores** (solo nombre), **equipos** y
@@ -183,6 +186,28 @@ y son gratis de testear; después **la lógica de negocio** (`internal/store`:
 devuelve el error correcto?); y por último **el contrato HTTP**
 (`internal/api`: ¿qué status code devuelve cada caso?) usando
 `httptest` en vez de levantar un servidor real en un puerto.
+
+## CI: tests + SAST en cada push
+
+Dos workflows en `.github/workflows/`, cada uno con su badge arriba en este
+README:
+
+- **`ci.yml`** corre `go vet` + `go test ./... -race` en cada push/PR a
+  `main`. Es la garantía de "el código compila y hace lo que dicen los
+  tests" antes de mergear nada.
+- **`sast.yml`** corre [`gosec`](https://github.com/securego/gosec), un
+  SAST para Go. La diferencia con los tests: un test corre tu código y
+  verifica el resultado; un SAST **nunca ejecuta nada** — lee el código
+  fuente y busca patrones conocidos como inseguros (ej. este mismo repo
+  tuvo que corregir dos: un servidor HTTP sin timeouts, vulnerable a
+  Slowloris, y un log que volcaba el path del request sin escapar). El
+  reporte también se sube al tab **Security → Code scanning** del repo en
+  GitHub, no solo al badge.
+
+Ambos badges leen directo el estado del último run de su workflow — no hay
+nada más que configurar para que se actualicen solos en cada push.
+
+## API REST
 
 ### Endpoints
 

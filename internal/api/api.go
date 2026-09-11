@@ -41,9 +41,18 @@ func NewServer(s *store.Store, instanceName string) http.Handler {
 
 // logMiddleware imprime método y path de cada request recibido; útil para
 // ver qué está pasando cuando la API corre dentro de un contenedor.
+//
+// Usamos %q (no %s) para method y path: %s los volcaría tal cual al log, y
+// method/path vienen del cliente sin validar, así que alguien podría meter
+// un salto de línea para falsificar una entrada de log completa (log
+// injection). %q los escapa entre comillas, así ese contenido queda
+// visible pero inerte.
 func logMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s", r.Method, r.URL.Path)
+		// #nosec G706 -- gosec marca cualquier dato del request que llegue
+		// a un log, sin evaluar el verbo usado. %q ya escapa saltos de
+		// línea y caracteres de control, así que no hay log injection real.
+		log.Printf("%q %q", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }

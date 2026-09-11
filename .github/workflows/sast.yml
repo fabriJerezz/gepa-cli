@@ -1,0 +1,53 @@
+# SAST (Static Application Security Testing): analiza el código fuente en
+# busca de patrones inseguros SIN ejecutarlo (a diferencia de un test, que
+# sí lo corre). Usamos gosec, el analizador de seguridad estándar para Go
+# (busca cosas como: comandos armados con input sin sanitizar, timeouts de
+# red faltantes, uso de crypto débil, etc — ver la lista completa de reglas
+# en https://github.com/securego/gosec#available-rules).
+#
+# El job queda en rojo si gosec encuentra algún hallazgo, lo que se refleja
+# en el badge del README como "valoración del análisis": verde = sin
+# hallazgos, rojo = hay algo para revisar.
+name: SAST
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  # security-events: write es necesario para poder subir el reporte al tab
+  # "Security" del repo (Code scanning alerts), no solo para el badge.
+  security-events: write
+
+jobs:
+  gosec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Instalar gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      # Generamos el reporte en formato SARIF (el estándar que entiende
+      # GitHub) además de imprimirlo en la consola del job. gosec devuelve
+      # exit code != 0 si hay hallazgos: eso es lo que pinta el job (y el
+      # badge) de rojo.
+      - name: Correr gosec
+        run: gosec -fmt sarif -out results.sarif ./...
+
+      # if: always() para que el reporte se suba a "Security > Code
+      # scanning" incluso cuando el paso anterior falló (que es justamente
+      # cuando más interesa verlo).
+      - name: Subir reporte a GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
