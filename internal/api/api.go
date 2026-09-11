@@ -13,14 +13,19 @@ import (
 	"gepa-cli/internal/store"
 )
 
-// NewServer arma el mux con todas las rutas de la API y le agrega el
-// middleware de logging. Usa el enrutamiento por método+path nativo de
-// net/http (disponible desde Go 1.22), por eso no hace falta un router
-// externo.
-func NewServer(s *store.Store) http.Handler {
+// NewServer arma el mux con todas las rutas de la API y le agrega los
+// middlewares de logging e identificación de instancia. Usa el enrutamiento
+// por método+path nativo de net/http (disponible desde Go 1.22), por eso no
+// hace falta un router externo.
+//
+// instanceName identifica a esta instancia en particular (p. ej. "app1").
+// Cuando corren varias instancias detrás de un balanceador de carga, es la
+// forma de saber "a quién le pegó" cada request: viaja en la cabecera
+// X-Instance de toda respuesta y en el campo "instance" de /health.
+func NewServer(s *store.Store, instanceName string) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /health", handleHealth(instanceName))
 
 	mux.HandleFunc("GET /players", handleListPlayers(s))
 	mux.HandleFunc("POST /players", handleCreatePlayer(s))
@@ -31,7 +36,7 @@ func NewServer(s *store.Store) http.Handler {
 	mux.HandleFunc("GET /matches", handleListMatches(s))
 	mux.HandleFunc("POST /matches", handleCreateMatch(s))
 
-	return logMiddleware(mux)
+	return logMiddleware(instanceMiddleware(instanceName, mux))
 }
 
 // logMiddleware imprime método y path de cada request recibido; útil para
@@ -43,10 +48,27 @@ func logMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// instanceMiddleware agrega la cabecera X-Instance a toda respuesta, para
+// poder identificar con `curl -i` (o mirando las dev tools) qué instancia
+// atendió cada request sin necesidad de pegarle a /health.
+func instanceMiddleware(instanceName string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Instance", instanceName)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // handleHealth es el endpoint que usa el healthcheck de Docker Compose para
 // saber si el contenedor de la app ya está listo para recibir tráfico.
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+// También devuelve el nombre de la instancia en el body, para poder
+// identificarla aunque no se inspeccionen las cabeceras de la respuesta.
+func handleHealth(instanceName string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":   "ok",
+			"instance": instanceName,
+		})
+	}
 }
 
 // createNameRequest es el body esperado tanto para crear jugadores como

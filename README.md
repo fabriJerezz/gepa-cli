@@ -53,13 +53,34 @@ de round robin, así que hacen falta unas cuantas requests para que se
 note la rotación entre los tres (`app1`, `app2`, `app3`). Verificado en
 este repo: con 20 requests, la distribución fue 7/7/6.
 
-### Nota sobre el estado
+### ¿Cómo sé a qué instancia le pegué?
 
-Cada instancia tiene **su propio Redis**, no uno compartido: son 3 pares
-`[app-redis]` aislados, no 3 réplicas con estado consistente. Esto significa
-que, por ejemplo, si creás un jugador y Nginx te enrutó a `app1`, ese
+`X-Upstream-Addr` (la agrega Nginx) muestra la IP:puerto interna del
+contenedor, pero no es muy legible. Para saber directamente si te
+respondió `app1`, `app2` o `app3`, la propia app expone esa info de dos
+formas:
+
+- Toda respuesta trae la cabecera **`X-Instance`** con el nombre de la
+  instancia (`app1`/`app2`/`app3`), seteado vía la variable de entorno
+  `INSTANCE_NAME` en `docker-compose.yml`.
+- `GET /health` devuelve además `{"status":"ok","instance":"app1"}` en el
+  body, por si no estás mirando las cabeceras.
+
+```bash
+curl -s -D - -o /dev/null http://localhost:8080/health | grep -i x-instance
+curl -s http://localhost:8080/health
+```
+
+### Nota sobre el estado: ¿comparten volumen?
+
+**No.** Cada instancia tiene **su propio volumen de Redis**
+(`redis1-data`, `redis2-data`, `redis3-data` — ver el bloque `volumes:` al
+final de `docker-compose.yml`), no uno compartido: son 3 pares
+`[app-redis]` completamente aislados entre sí, no 3 réplicas con estado
+consistente. Por eso, si creás un jugador y Nginx te enrutó a `app1`, ese
 jugador va a aparecer en `GET /players` solo cuando vuelvas a caer en
-`app1` (o si le pegás directo por `localhost:8081`). Para comprobarlo:
+`app1` (o si le pegás directo por `localhost:8081`) — nunca en `app2` o
+`app3`. Para comprobarlo:
 
 ```bash
 curl -X POST localhost:8081/players -d '{"name":"Solo en instancia 1"}'
@@ -69,7 +90,9 @@ curl localhost:8082/players   # no lo ves: redis2 no tiene ese dato
 
 Si en cambio necesitás que las 3 instancias vean los mismos datos, el
 cambio es apuntar las 3 apps a un único servicio de Redis compartido en vez
-de uno por instancia (o migrar a Redis en modo cluster/sentinel).
+de uno por instancia (o migrar a Redis en modo cluster/sentinel) — dejarían
+de ser 3 pares independientes y pasarían a ser 3 réplicas sin estado propio
+sobre una misma base de datos.
 
 Para usar la **CLI** contra una instancia puntual, corré un contenedor
 apuntando a su Redis (por ejemplo, la de `app1`):
@@ -132,7 +155,7 @@ REDIS_ADDR=localhost:6390 ./gepa-cli team list
 
 | Método | Ruta        | Descripción                          |
 |--------|-------------|---------------------------------------|
-| GET    | `/health`   | Chequeo de salud                      |
+| GET    | `/health`   | Chequeo de salud (incluye `instance`) |
 | GET    | `/players`  | Lista todos los jugadores             |
 | POST   | `/players`  | Crea un jugador (`{"name": "..."}`)   |
 | GET    | `/teams`    | Lista todos los equipos               |

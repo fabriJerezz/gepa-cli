@@ -35,6 +35,7 @@ services:
     <<: *app-common
     environment:
       - REDIS_ADDR=redis1:6379
+      - INSTANCE_NAME=app1
     depends_on:
       redis1:
         condition: service_healthy
@@ -54,6 +55,7 @@ services:
     <<: *app-common
     environment:
       - REDIS_ADDR=redis2:6379
+      - INSTANCE_NAME=app2
     depends_on:
       redis2:
         condition: service_healthy
@@ -70,6 +72,7 @@ services:
     <<: *app-common
     environment:
       - REDIS_ADDR=redis3:6379
+      - INSTANCE_NAME=app3
     depends_on:
       redis3:
         condition: service_healthy

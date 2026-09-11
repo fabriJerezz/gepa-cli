@@ -200,9 +200,23 @@ func runServe(s *store.Store, args []string) error {
 	if len(args) > 0 {
 		addr = args[0]
 	}
-	handler := api.NewServer(s)
-	fmt.Printf("escuchando en %s\n", addr)
+	handler := api.NewServer(s, instanceName())
+	fmt.Printf("escuchando en %s (instancia %q)\n", addr, instanceName())
 	return http.ListenAndServe(addr, handler)
+}
+
+// instanceName identifica a esta instancia frente a las demás cuando corren
+// varias detrás de un balanceador de carga (ver docker-compose.yml, donde
+// cada app tiene su propia INSTANCE_NAME). Si no está seteada, usamos el
+// hostname del contenedor/proceso como mejor esfuerzo.
+func instanceName() string {
+	if name := os.Getenv("INSTANCE_NAME"); name != "" {
+		return name
+	}
+	if hostname, err := os.Hostname(); err == nil {
+		return hostname
+	}
+	return "desconocida"
 }
 
 // printUsage imprime la ayuda de la CLI a stdout.
