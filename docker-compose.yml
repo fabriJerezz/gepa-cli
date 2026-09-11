@@ -1,0 +1,96 @@
+# Arquitectura: 3 instancias independientes de [gepa-cli + redis] detrás de
+# un Nginx que reparte la carga entre ellas (round robin, el balanceo por
+# defecto de Nginx). Cada instancia de la app tiene SU PROPIO Redis, no uno
+# compartido: son 3 pares aislados, no 3 réplicas de un mismo backend con
+# estado compartido.
+#
+# Esto significa que los datos NO son consistentes entre instancias: si
+# creás un jugador cuando Nginx te enruta a app1, ese jugador solo va a
+# aparecer en las respuestas cuando vuelvas a caer en app1 (ver README,
+# sección "Nota sobre el estado").
+
+# Bloques reutilizables (anchors de YAML) para no repetir la misma config en
+# cada Redis y cada app.
+x-redis: &redis-common
+  image: redis:7-alpine
+  command: ["redis-server", "--save", "60", "1"]
+  healthcheck:
+    test: ["CMD", "redis-cli", "ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+
+x-app: &app-common
+  build: .
+  restart: on-failure
+
+services:
+  # --- Instancia 1: gepa-cli-1 + redis-1 -----------------------------
+  redis1:
+    <<: *redis-common
+    volumes:
+      - redis1-data:/data
+
+  app1:
+    <<: *app-common
+    environment:
+      - REDIS_ADDR=redis1:6379
+    depends_on:
+      redis1:
+        condition: service_healthy
+    # Puerto expuesto solo para poder pegarle directo a esta instancia y
+    # comprobar que cada una tiene su propio estado. El punto de entrada
+    # normal de la app es Nginx (puerto 8080).
+    ports:
+      - "8081:8080"
+
+  # --- Instancia 2: gepa-cli-2 + redis-2 -----------------------------
+  redis2:
+    <<: *redis-common
+    volumes:
+      - redis2-data:/data
+
+  app2:
+    <<: *app-common
+    environment:
+      - REDIS_ADDR=redis2:6379
+    depends_on:
+      redis2:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+
+  # --- Instancia 3: gepa-cli-3 + redis-3 -----------------------------
+  redis3:
+    <<: *redis-common
+    volumes:
+      - redis3-data:/data
+
+  app3:
+    <<: *app-common
+    environment:
+      - REDIS_ADDR=redis3:6379
+    depends_on:
+      redis3:
+        condition: service_healthy
+    ports:
+      - "8083:8080"
+
+  # --- Balanceador de carga -------------------------------------------
+  # Único punto de entrada público de la aplicación. Reparte cada request
+  # entre app1, app2 y app3 (ver nginx.conf).
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app1
+      - app2
+      - app3
+
+volumes:
+  redis1-data:
+  redis2-data:
+  redis3-data:

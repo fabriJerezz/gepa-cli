@@ -1,0 +1,10 @@
+# No enviamos estos archivos al contexto de build de Docker: aceleran el
+# build y evitan copiar basura local a la imagen.
+.git
+.gitignore
+README.md
+gepa-cli
+*.log
+.DS_Store
+.idea/
+.vscode/

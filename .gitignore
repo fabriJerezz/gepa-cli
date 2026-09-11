@@ -1,0 +1,12 @@
+# Binarios compilados
+/gepa-cli
+/gepa
+
+# Go
+*.test
+*.out
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
