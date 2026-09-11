@@ -163,7 +163,26 @@ REDIS_ADDR=localhost:6390 ./gepa-cli team list
 ./gepa-cli serve :8080
 ```
 
-## API REST
+## Tests
+
+```bash
+go test ./...
+```
+
+**¿Contra qué Redis corren los tests si no levantaste ninguno?** Contra
+ninguno real: usan [`miniredis`](https://github.com/alicebob/miniredis), una
+implementación de Redis en memoria pensada para tests. Se levanta y se
+destruye dentro del propio proceso del test (`miniredis.RunT(t)`), así que
+no depende de Docker ni de una conexión de red — corre en milisegundos y
+funciona igual en tu máquina que en GitHub Actions.
+
+La regla simple para elegir qué testear: **funciones puras primero**
+(`extractRedisAddrFlag`, `instanceName`) porque no dependen de nada externo
+y son gratis de testear; después **la lógica de negocio** (`internal/store`:
+¿un jugador sin nombre falla? ¿un partido contra un equipo inexistente
+devuelve el error correcto?); y por último **el contrato HTTP**
+(`internal/api`: ¿qué status code devuelve cada caso?) usando
+`httptest` en vez de levantar un servidor real en un puerto.
 
 ### Endpoints
 
