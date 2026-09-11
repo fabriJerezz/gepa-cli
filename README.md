@@ -20,13 +20,14 @@ escriben sobre la misma base de datos.
 docker compose up --build
 ```
 
-Esto levanta **3 instancias independientes de `[gepa-cli + redis]`** más un
-**Nginx** que balancea la carga entre ellas:
+Esto levanta **3 instancias de la API (`app1`, `app2`, `app3`)** sin estado
+propio, todas conectadas a un **único Redis compartido**, más un **Nginx**
+que balancea la carga entre ellas:
 
 | Servicio | Rol                                            |
 |----------|-------------------------------------------------|
-| `redis1`, `redis2`, `redis3` | Una base de datos Redis por instancia |
-| `app1`, `app2`, `app3`       | Una API REST por instancia, cada una conectada a su propio Redis |
+| `redis`                      | La única base de datos, compartida por las 3 instancias |
+| `app1`, `app2`, `app3`       | 3 réplicas idénticas de la misma API REST, sin estado propio |
 | `nginx`                      | Balanceador de carga (round robin), único punto de entrada público |
 
 Punto de entrada de la aplicación (a través de Nginx):
@@ -71,41 +72,54 @@ curl -s -D - -o /dev/null http://localhost:8080/health | grep -i x-instance
 curl -s http://localhost:8080/health
 ```
 
-### Nota sobre el estado: ¿comparten volumen?
+### Nota sobre el estado: las 3 instancias comparten los mismos datos
 
-**No.** Cada instancia tiene **su propio volumen de Redis**
-(`redis1-data`, `redis2-data`, `redis3-data` — ver el bloque `volumes:` al
-final de `docker-compose.yml`), no uno compartido: son 3 pares
-`[app-redis]` completamente aislados entre sí, no 3 réplicas con estado
-consistente. Por eso, si creás un jugador y Nginx te enrutó a `app1`, ese
-jugador va a aparecer en `GET /players` solo cuando vuelvas a caer en
-`app1` (o si le pegás directo por `localhost:8081`) — nunca en `app2` o
-`app3`. Para comprobarlo:
+Las 3 apps apuntan al mismo `REDIS_ADDR=redis:6379`, así que ven
+exactamente la misma información sin importar a cuál te haya enrutado
+Nginx. Podés comprobarlo creando un dato en una instancia y leyéndolo
+desde otra:
 
 ```bash
-curl -X POST localhost:8081/players -d '{"name":"Solo en instancia 1"}'
+curl -X POST localhost:8081/players -d '{"name":"Compartido entre instancias"}'
 curl localhost:8081/players   # lo ves
-curl localhost:8082/players   # no lo ves: redis2 no tiene ese dato
+curl localhost:8082/players   # también: es el mismo Redis
+curl localhost:8083/players   # también
 ```
 
-Si en cambio necesitás que las 3 instancias vean los mismos datos, el
-cambio es apuntar las 3 apps a un único servicio de Redis compartido en vez
-de uno por instancia (o migrar a Redis en modo cluster/sentinel) — dejarían
-de ser 3 pares independientes y pasarían a ser 3 réplicas sin estado propio
-sobre una misma base de datos.
+#### ¿Por qué hace falta que sea el mismo Redis, si en producción una base de datos también puede tener varias instancias con los mismos datos?
 
-Para usar la **CLI** contra una instancia puntual, corré un contenedor
-apuntando a su Redis (por ejemplo, la de `app1`):
+Porque "varias instancias con los mismos datos" en producción **no**
+significa apuntar a instancias independientes que casualmente coinciden —
+significa **replicación**: varios procesos de base de datos que se
+sincronizan activamente entre sí (una *primary* que acepta escrituras y
+*replicas* que la siguen, o un *cluster* con particionamiento y failover
+automático — Redis Cluster, Redis Sentinel, o en el mundo SQL: replicación
+primary-replica, Patroni, Aurora, etc.).
+
+Acá optamos por el camino simple: **un solo proceso de Redis**, compartido
+por las 3 apps (que sí son réplicas sin estado, apropiadas para ir detrás
+de un balanceador). Eso resuelve la consistencia de datos, pero el propio
+Redis vuelve a ser un único punto de falla y un cuello de botella — si se
+cae, las 3 instancias se caen con él. El patrón de producción (réplicas de
+Redis reales) es más complejo porque hay que resolver: qué nodo acepta
+escrituras, cómo se propagan a las réplicas, qué pasa con una escritura
+concurrente, y cómo se promueve automáticamente una réplica a primary si el
+nodo activo se cae. Ese nivel de complejidad queda fuera del alcance de
+este proyecto, pero el siguiente paso natural sería agregar Redis Sentinel
+o Redis Cluster en vez de un Redis único.
+
+Para usar la **CLI** contra la app, corré un contenedor puntual (ya apunta
+al Redis compartido):
 
 ```bash
-docker compose run --rm -e REDIS_ADDR=redis1:6379 app1 player add "Lionel Messi"
-docker compose run --rm -e REDIS_ADDR=redis1:6379 app1 player list
+docker compose run --rm app1 player add "Lionel Messi"
+docker compose run --rm app1 player list
 ```
 
 Apagar todo:
 
 ```bash
-docker compose down       # conserva los datos (volúmenes redis1-data, redis2-data, redis3-data)
+docker compose down       # conserva los datos (volumen redis-data)
 docker compose down -v    # borra también los datos
 ```
 
@@ -176,12 +190,6 @@ Body para crear un partido:
 
 ### Ejemplos con curl
 
-> Si tenés las 3 instancias corriendo detrás de Nginx (`localhost:8080`),
-> cada request de esta secuencia puede caer en una instancia distinta y
-> los IDs no van a coincidir entre sí (ver "Nota sobre el estado" más
-> arriba). Para reproducir esta secuencia tal cual, corré todo contra una
-> sola instancia fija, por ejemplo `localhost:8081`.
-
 ```bash
 curl -X POST localhost:8080/players -d '{"name":"Lionel Messi"}'
 curl localhost:8080/players
@@ -204,7 +212,7 @@ curl localhost:8080/matches
 │   ├── store/               # Persistencia en Redis
 │   └── api/                  # Handlers HTTP de la API REST
 ├── Dockerfile               # Build multi-stage de la imagen de la app
-├── docker-compose.yml        # Orquesta 3x [app + Redis] + Nginx
+├── docker-compose.yml        # Orquesta 3x app + 1 Redis compartido + Nginx
 ├── nginx.conf                # Config del balanceador de carga (round robin)
 └── .dockerignore
 ```

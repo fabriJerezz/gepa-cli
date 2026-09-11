@@ -1,81 +1,63 @@
-# Arquitectura: 3 instancias independientes de [gepa-cli + redis] detrás de
-# un Nginx que reparte la carga entre ellas (round robin, el balanceo por
-# defecto de Nginx). Cada instancia de la app tiene SU PROPIO Redis, no uno
-# compartido: son 3 pares aislados, no 3 réplicas de un mismo backend con
-# estado compartido.
+# Arquitectura: 3 instancias de gepa-cli (app1, app2, app3) sin estado
+# propio, todas apuntando a un ÚNICO Redis compartido, detrás de un Nginx
+# que reparte la carga entre ellas (round robin, el balanceo por defecto de
+# Nginx). Al compartir la misma base de datos, las 3 instancias ven
+# exactamente los mismos jugadores/equipos/partidos sin importar a cuál te
+# haya enrutado Nginx (identificá cuál te respondió con la cabecera
+# X-Instance o el campo "instance" de /health).
 #
-# Esto significa que los datos NO son consistentes entre instancias: si
-# creás un jugador cuando Nginx te enruta a app1, ese jugador solo va a
-# aparecer en las respuestas cuando vuelvas a caer en app1 (ver README,
-# sección "Nota sobre el estado").
-
-# Bloques reutilizables (anchors de YAML) para no repetir la misma config en
-# cada Redis y cada app.
-x-redis: &redis-common
-  image: redis:7-alpine
-  command: ["redis-server", "--save", "60", "1"]
-  healthcheck:
-    test: ["CMD", "redis-cli", "ping"]
-    interval: 5s
-    timeout: 3s
-    retries: 5
+# Ojo: un único Redis es también un único punto de falla y un cuello de
+# botella — no es el patrón de alta disponibilidad de producción (eso
+# sería Redis Cluster/Sentinel con réplicas). Ver README, sección
+# "Nota sobre el estado: las 3 instancias comparten los mismos datos".
 
 x-app: &app-common
   build: .
   restart: on-failure
+  depends_on:
+    redis:
+      condition: service_healthy
 
 services:
-  # --- Instancia 1: gepa-cli-1 + redis-1 -----------------------------
-  redis1:
-    <<: *redis-common
+  # --- Base de datos compartida por las 3 instancias -------------------
+  redis:
+    image: redis:7-alpine
     volumes:
-      - redis1-data:/data
+      - redis-data:/data
+    command: ["redis-server", "--save", "60", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
+  # --- Instancia 1 -------------------------------------------------------
   app1:
     <<: *app-common
     environment:
-      - REDIS_ADDR=redis1:6379
+      - REDIS_ADDR=redis:6379
       - INSTANCE_NAME=app1
-    depends_on:
-      redis1:
-        condition: service_healthy
     # Puerto expuesto solo para poder pegarle directo a esta instancia y
-    # comprobar que cada una tiene su propio estado. El punto de entrada
-    # normal de la app es Nginx (puerto 8080).
+    # comprobar que ahora comparte los mismos datos que las demás. El
+    # punto de entrada normal de la app es Nginx (puerto 8080).
     ports:
       - "8081:8080"
 
-  # --- Instancia 2: gepa-cli-2 + redis-2 -----------------------------
-  redis2:
-    <<: *redis-common
-    volumes:
-      - redis2-data:/data
-
+  # --- Instancia 2 -------------------------------------------------------
   app2:
     <<: *app-common
     environment:
-      - REDIS_ADDR=redis2:6379
+      - REDIS_ADDR=redis:6379
       - INSTANCE_NAME=app2
-    depends_on:
-      redis2:
-        condition: service_healthy
     ports:
       - "8082:8080"
 
-  # --- Instancia 3: gepa-cli-3 + redis-3 -----------------------------
-  redis3:
-    <<: *redis-common
-    volumes:
-      - redis3-data:/data
-
+  # --- Instancia 3 -------------------------------------------------------
   app3:
     <<: *app-common
     environment:
-      - REDIS_ADDR=redis3:6379
+      - REDIS_ADDR=redis:6379
       - INSTANCE_NAME=app3
-    depends_on:
-      redis3:
-        condition: service_healthy
     ports:
       - "8083:8080"
 
@@ -94,6 +76,4 @@ services:
       - app3
 
 volumes:
-  redis1-data:
-  redis2-data:
-  redis3-data:
+  redis-data:
