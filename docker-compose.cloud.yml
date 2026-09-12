@@ -1,0 +1,73 @@
+# Compose para la NUBE. Misma arquitectura que docker-compose.yml (nginx +
+# 3 réplicas de la app + 1 Redis compartido), con una sola diferencia
+# importante:
+#
+#   docker-compose.yml        -> build: .      (compila la imagen desde el código)
+#   docker-compose.cloud.yml  -> image: ghcr.io/...  (BAJA la imagen ya construida)
+#
+# Esa es la diferencia entre "desarrollo" y "despliegue desde un registry":
+# el servidor no necesita el código fuente ni Go instalado, solo Docker.
+# La imagen que baja es exactamente el artefacto que publicó el workflow
+# .github/workflows/publish.yml, ya testeado por CI.
+#
+# Uso en la VM:
+#   docker compose -f docker-compose.cloud.yml pull
+#   docker compose -f docker-compose.cloud.yml up -d
+
+x-app: &app-common
+  # :latest apunta siempre al último push a main. Para fijar una versión
+  # exacta, reemplazar por el tag del commit: ...gepa-cli:sha-abc1234
+  image: ghcr.io/fabrijerezz/gepa-cli:latest
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--save", "60", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app1:
+    <<: *app-common
+    environment:
+      - REDIS_ADDR=redis:6379
+      - INSTANCE_NAME=app1
+
+  app2:
+    <<: *app-common
+    environment:
+      - REDIS_ADDR=redis:6379
+      - INSTANCE_NAME=app2
+
+  app3:
+    <<: *app-common
+    environment:
+      - REDIS_ADDR=redis:6379
+      - INSTANCE_NAME=app3
+
+  # En la nube NO exponemos los puertos 8081-8083 de cada instancia: el
+  # único puerto público es el 80 de Nginx. Para identificar qué instancia
+  # respondió está la cabecera X-Instance.
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app1
+      - app2
+      - app3
+
+volumes:
+  redis-data:

@@ -207,6 +207,41 @@ README:
 Ambos badges leen directo el estado del último run de su workflow — no hay
 nada más que configurar para que se actualicen solos en cada push.
 
+## CD: publicar la imagen en el registry
+
+`publish.yml` construye la imagen y la sube a **GHCR**
+(`ghcr.io/fabrijerezz/gepa-cli`), el registry de contenedores de GitHub.
+
+**¿Para qué sirve un registry?** Es el "depósito" de imágenes ya
+construidas. Sin él, cada servidor donde quieras desplegar necesitaría el
+código fuente, Go, y compilar la imagen por su cuenta. Con él, el servidor
+solo hace `docker pull` y corre un artefacto ya testeado — el mismo binario
+exacto que pasó por CI, sin recompilar nada.
+
+Dos detalles del workflow que no son obvios:
+
+- **Multi-arquitectura** (`linux/amd64,linux/arm64`): una imagen compilada
+  para x86 no arranca en un CPU ARM. Como la VM gratis de Oracle Cloud es
+  ARM (Ampere), el workflow usa QEMU para emular esa arquitectura y meter
+  las dos variantes en la misma imagen. Después `docker pull` baja
+  automáticamente la que corresponde a cada máquina.
+- **Sin secrets**: GHCR se autentica con el `GITHUB_TOKEN` que GitHub le
+  inyecta al workflow. Con Docker Hub habría que crear un access token a
+  mano y guardarlo como secret del repo.
+
+Se publican dos tags: `:latest` (último main, el que usa el cloud) y
+`:sha-<commit>` (inmutable, para volver a una versión exacta).
+
+### Local vs. nube: dos composes
+
+| Archivo | Apps | Para qué |
+|---------|------|----------|
+| `docker-compose.yml` | `build: .` | Desarrollo: compila desde el código que tenés al lado |
+| `docker-compose.cloud.yml` | `image: ghcr.io/...` | Despliegue: baja la imagen publicada, no necesita el código |
+
+Son la misma arquitectura (nginx + 3 réplicas + Redis); lo único que cambia
+es de dónde sale la imagen de la app.
+
 ## API REST
 
 ### Endpoints
@@ -256,8 +291,13 @@ curl localhost:8080/matches
 │   ├── store/               # Persistencia en Redis
 │   └── api/                  # Handlers HTTP de la API REST
 ├── Dockerfile               # Build multi-stage de la imagen de la app
-├── docker-compose.yml        # Orquesta 3x app + 1 Redis compartido + Nginx
+├── docker-compose.yml        # LOCAL: compila la imagen (build: .)
+├── docker-compose.cloud.yml   # NUBE: baja la imagen del registry (image: ghcr.io/...)
 ├── nginx.conf                # Config del balanceador de carga (round robin)
+├── .github/workflows/
+│   ├── ci.yml                 # Tests (go vet + go test -race)
+│   ├── sast.yml               # Análisis de seguridad (gosec)
+│   └── publish.yml            # Build multi-arch + push a GHCR
 └── .dockerignore
 ```
 
