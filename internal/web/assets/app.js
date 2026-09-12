@@ -7,9 +7,11 @@ const state = {
 const elements = {
   errorBanner: document.querySelector("#error-banner"),
   instanceValue: document.querySelector("#instance-value"),
-  playersList: document.querySelector("#players-list"),
-  teamsList: document.querySelector("#teams-list"),
+  squadsList: document.querySelector("#squads-list"),
   matchesList: document.querySelector("#matches-list"),
+  playerForm: document.querySelector("#player-form"),
+  playerTeam: document.querySelector("#player-team"),
+  playerSubmit: document.querySelector("#player-submit"),
   teamA: document.querySelector("#team-a"),
   teamB: document.querySelector("#team-b"),
   matchSubmit: document.querySelector("#match-submit"),
@@ -25,6 +27,9 @@ async function request(path, options = {}) {
     payload = await response.json();
   } catch {
     payload = null;
+  }
+  if (response.status === 204) {
+    return null;
   }
   if (!response.ok) {
     throw new Error(payload?.error || "No se pudo completar la solicitud.");
@@ -43,67 +48,114 @@ function clearError() {
 }
 
 function addEmptyState(container, message) {
-  const empty = document.createElement(container.tagName === "UL" ? "li" : "p");
+  const empty = document.createElement("p");
   empty.className = "empty-state";
   empty.textContent = message;
   container.append(empty);
 }
 
-function renderPlayers() {
-  elements.playersList.replaceChildren();
-  if (!state.players.length) {
-    addEmptyState(elements.playersList, "Todavía no hay jugadores registrados.");
+function renderSquads() {
+  elements.squadsList.replaceChildren();
+  if (!state.teams.length) {
+    addEmptyState(elements.squadsList, "Todavía no hay plantel en esta cancha.");
     return;
   }
+
+  const playersByTeam = new Map();
   state.players.forEach((player) => {
-    const item = document.createElement("li");
-    item.className = "entity-row";
-    const name = document.createElement("span");
-    name.textContent = player.name;
+    const roster = playersByTeam.get(player.team_id) || [];
+    roster.push(player);
+    playersByTeam.set(player.team_id, roster);
+  });
+
+  state.teams.forEach((team) => {
+    const card = document.createElement("article");
+    card.className = "squad-card";
+
+    const heading = document.createElement("div");
+    heading.className = "squad-heading";
+    const name = document.createElement("h3");
+    name.textContent = team.name;
+    const actions = document.createElement("div");
+    actions.className = "squad-actions";
     const id = document.createElement("span");
-    id.className = "entity-id";
-    id.textContent = `#${player.id}`;
-    item.append(name, id);
-    elements.playersList.append(item);
+    id.className = "squad-id";
+    id.textContent = `#${team.id}`;
+    const deleteTeam = document.createElement("button");
+    deleteTeam.type = "button";
+    deleteTeam.className = "delete-button";
+    deleteTeam.textContent = "Eliminar";
+    deleteTeam.setAttribute("aria-label", `Eliminar equipo ${team.name}`);
+    deleteTeam.addEventListener("click", async () => {
+      try {
+        await request(`/teams/${team.id}`, { method: "DELETE" });
+        await Promise.all([loadTeams(), loadPlayers()]);
+        clearError();
+      } catch (error) {
+        showError(error);
+      }
+    });
+    actions.append(id, deleteTeam);
+    heading.append(name, actions);
+    card.append(heading);
+
+    const roster = playersByTeam.get(team.id) || [];
+    if (!roster.length) {
+      const empty = document.createElement("p");
+      empty.className = "squad-empty";
+      empty.textContent = "Todavía no hay plantel en esta cancha.";
+      card.append(empty);
+    } else {
+      const list = document.createElement("ul");
+      list.className = "roster";
+      roster.forEach((player) => {
+        const item = document.createElement("li");
+        const playerLabel = document.createElement("span");
+        playerLabel.textContent = `${player.name} · #${player.id}`;
+        const deletePlayer = document.createElement("button");
+        deletePlayer.type = "button";
+        deletePlayer.className = "delete-button";
+        deletePlayer.textContent = "Eliminar";
+        deletePlayer.setAttribute("aria-label", `Eliminar jugador ${player.name}`);
+        deletePlayer.addEventListener("click", async () => {
+          try {
+            await request(`/players/${player.id}`, { method: "DELETE" });
+            await loadPlayers();
+            clearError();
+          } catch (error) {
+            showError(error);
+          }
+        });
+        item.append(playerLabel, deletePlayer);
+        list.append(item);
+      });
+      card.append(list);
+    }
+    elements.squadsList.append(card);
   });
 }
 
-function renderTeams() {
-  elements.teamsList.replaceChildren();
-  if (!state.teams.length) {
-    addEmptyState(elements.teamsList, "Crea dos equipos para abrir la fecha.");
-  } else {
-    state.teams.forEach((team) => {
-      const item = document.createElement("li");
-      item.className = "entity-row";
-      const name = document.createElement("span");
-      name.textContent = team.name;
-      const id = document.createElement("span");
-      id.className = "entity-id";
-      id.textContent = `#${team.id}`;
-      item.append(name, id);
-      elements.teamsList.append(item);
-    });
-  }
-  renderTeamOptions();
+function fillTeamSelect(select, emptyLabel) {
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+    placeholder.textContent = state.teams.length ? "Elige un equipo" : emptyLabel;
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  select.append(placeholder);
+  state.teams.forEach((team) => {
+    const option = document.createElement("option");
+    option.value = String(team.id);
+    option.textContent = team.name;
+    select.append(option);
+  });
 }
 
 function renderTeamOptions() {
-  [elements.teamA, elements.teamB].forEach((select) => {
-    select.replaceChildren();
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = state.teams.length ? "Elige un equipo" : "Sin equipos disponibles";
-    placeholder.disabled = true;
-    placeholder.selected = true;
-    select.append(placeholder);
-    state.teams.forEach((team) => {
-      const option = document.createElement("option");
-      option.value = String(team.id);
-      option.textContent = team.name;
-      select.append(option);
-    });
-  });
+  fillTeamSelect(elements.playerTeam, "Primero crea un equipo");
+  fillTeamSelect(elements.teamA, "No hay equipos disponibles");
+  fillTeamSelect(elements.teamB, "No hay equipos disponibles");
+  elements.playerSubmit.disabled = state.teams.length < 1;
   elements.matchSubmit.disabled = state.teams.length < 2;
 }
 
@@ -115,14 +167,15 @@ function teamName(id) {
 function renderMatches() {
   elements.matchesList.replaceChildren();
   if (!state.matches.length) {
-    addEmptyState(elements.matchesList, "Aún no hay resultados en el tablero.");
+    addEmptyState(elements.matchesList, "Todavía no hay partidos en el marcador.");
     return;
   }
+
   state.matches.forEach((match) => {
     const row = document.createElement("div");
-    row.className = "scoreboard";
+    row.className = "match-row";
     const home = document.createElement("span");
-    home.className = "scoreboard-team";
+    home.className = "match-team";
     home.textContent = teamName(match.team_a_id);
     const scoreline = document.createElement("span");
     scoreline.className = "scoreline";
@@ -135,21 +188,42 @@ function renderMatches() {
     scoreB.textContent = String(match.score_b);
     scoreline.append(scoreA, separator, scoreB);
     const away = document.createElement("span");
-    away.className = "scoreboard-team";
+    away.className = "match-team";
     away.textContent = teamName(match.team_b_id);
-    row.append(home, scoreline, away);
+    const deleteMatch = document.createElement("button");
+    deleteMatch.type = "button";
+    deleteMatch.className = "delete-button";
+    deleteMatch.textContent = "Eliminar";
+    deleteMatch.setAttribute("aria-label", `Eliminar partido #${match.id}`);
+    deleteMatch.addEventListener("click", async () => {
+      try {
+        await request(`/matches/${match.id}`, { method: "DELETE" });
+        await loadMatches();
+        clearError();
+      } catch (error) {
+        showError(error);
+      }
+    });
+    row.append(home, scoreline, away, deleteMatch);
     elements.matchesList.append(row);
   });
 }
 
+function renderAll() {
+  renderSquads();
+  renderTeamOptions();
+  renderMatches();
+}
+
 async function loadPlayers() {
   state.players = await request("/players");
-  renderPlayers();
+  renderSquads();
 }
 
 async function loadTeams() {
   state.teams = await request("/teams");
-  renderTeams();
+  renderSquads();
+  renderTeamOptions();
   renderMatches();
 }
 
@@ -170,38 +244,48 @@ async function loadDashboard() {
     state.players = players;
     state.teams = teams;
     state.matches = matches;
-    renderPlayers();
-    renderTeams();
-    renderMatches();
+    renderAll();
   } catch (error) {
     elements.instanceValue.textContent = "No disponible";
     showError(error);
   }
 }
 
-async function createEntity(form, path, reload) {
-  const input = form.querySelector("input");
+elements.playerForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = new FormData(form);
   try {
-    await request(path, {
+    await request("/players", {
       method: "POST",
-      body: JSON.stringify({ name: input.value }),
+      body: JSON.stringify({
+        name: data.get("name"),
+        team_id: Number(data.get("team_id")),
+      }),
     });
     form.reset();
-    await reload();
+    await loadPlayers();
     clearError();
   } catch (error) {
     showError(error);
   }
-}
-
-document.querySelector("#player-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  createEntity(event.currentTarget, "/players", loadPlayers);
 });
 
-document.querySelector("#team-form").addEventListener("submit", (event) => {
+document.querySelector("#team-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  createEntity(event.currentTarget, "/teams", loadTeams);
+  const form = event.currentTarget;
+  const data = new FormData(form);
+  try {
+    await request("/teams", {
+      method: "POST",
+      body: JSON.stringify({ name: data.get("name") }),
+    });
+    form.reset();
+    await loadTeams();
+    clearError();
+  } catch (error) {
+    showError(error);
+  }
 });
 
 document.querySelector("#match-form").addEventListener("submit", async (event) => {

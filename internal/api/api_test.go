@@ -82,8 +82,8 @@ func TestFrontendMantieneInstancia(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/html") {
 		t.Errorf("Content-Type = %q, esperaba HTML", got)
 	}
-	if !strings.Contains(rec.Body.String(), "GEPA") {
-		t.Error("el frontend no contiene la marca GEPA")
+	if !strings.Contains(rec.Body.String(), "FutGo") {
+		t.Error("el frontend no contiene la marca FutGo")
 	}
 	if got := rec.Header().Get("X-Instance"); got != "app1" {
 		t.Errorf("X-Instance = %q, esperaba %q", got, "app1")
@@ -92,8 +92,12 @@ func TestFrontendMantieneInstancia(t *testing.T) {
 
 func TestCreateYListarPlayers(t *testing.T) {
 	h := newTestServer(t, "app1")
+	teamID := createTeam(t, h, "Argentina")
 
-	rec := doRequest(t, h, http.MethodPost, "/players", map[string]string{"name": "Lionel Messi"})
+	rec := doRequest(t, h, http.MethodPost, "/players", map[string]any{
+		"name":    "Lionel Messi",
+		"team_id": teamID,
+	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -107,17 +111,65 @@ func TestCreateYListarPlayers(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &players); err != nil {
 		t.Fatalf("body inválido: %v", err)
 	}
-	if len(players) != 1 || players[0]["name"] != "Lionel Messi" {
+	if len(players) != 1 || players[0]["name"] != "Lionel Messi" || int(players[0]["team_id"].(float64)) != teamID {
 		t.Errorf("jugadores inesperados: %v", players)
+	}
+}
+
+func TestDeletePlayerYListaVacia(t *testing.T) {
+	h := newTestServer(t, "app1")
+	teamID := createTeam(t, h, "Argentina")
+
+	rec := doRequest(t, h, http.MethodPost, "/players", map[string]any{
+		"name":    "Lionel Messi",
+		"team_id": teamID,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("creando jugador: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(t, h, http.MethodDelete, "/players/1", nil)
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Fatalf("borrando jugador: status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(t, h, http.MethodGet, "/players", nil)
+	var players []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &players); err != nil {
+		t.Fatalf("body inválido: %v", err)
+	}
+	if len(players) != 0 {
+		t.Fatalf("esperaba lista vacía, obtuve %v", players)
+	}
+}
+
+func TestDeletePlayerInexistenteDevuelve404(t *testing.T) {
+	h := newTestServer(t, "app1")
+
+	rec := doRequest(t, h, http.MethodDelete, "/players/999", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, esperaba %d", rec.Code, http.StatusNotFound)
 	}
 }
 
 func TestCreatePlayerNombreVacio(t *testing.T) {
 	h := newTestServer(t, "app1")
 
-	rec := doRequest(t, h, http.MethodPost, "/players", map[string]string{"name": ""})
+	rec := doRequest(t, h, http.MethodPost, "/players", map[string]any{"name": "", "team_id": 0})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, esperaba %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCreatePlayerEquipoInexistenteDevuelve404(t *testing.T) {
+	h := newTestServer(t, "app1")
+
+	rec := doRequest(t, h, http.MethodPost, "/players", map[string]any{
+		"name":    "Lionel Messi",
+		"team_id": 999,
+	})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, esperaba %d (equipo inexistente)", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -158,6 +210,67 @@ func TestCreateMatchFlujoCompleto(t *testing.T) {
 	}
 	if len(matches) != 1 {
 		t.Fatalf("esperaba 1 partido, obtuve %d", len(matches))
+	}
+}
+
+func TestDeleteTeamConJugadorYLuegoSinEl(t *testing.T) {
+	h := newTestServer(t, "app1")
+	teamID := createTeam(t, h, "Argentina")
+
+	rec := doRequest(t, h, http.MethodPost, "/players", map[string]any{
+		"name":    "Lionel Messi",
+		"team_id": teamID,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("creando jugador: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(t, h, http.MethodDelete, "/teams/1", nil)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "el equipo tiene jugadores") {
+		t.Fatalf("borrando equipo con jugador: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(t, h, http.MethodDelete, "/players/1", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("borrando jugador: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rec = doRequest(t, h, http.MethodDelete, "/teams/1", nil)
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Fatalf("borrando equipo vacío: status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteMatch(t *testing.T) {
+	h := newTestServer(t, "app1")
+	teamA := createTeam(t, h, "Argentina")
+	teamB := createTeam(t, h, "Francia")
+
+	rec := doRequest(t, h, http.MethodPost, "/matches", map[string]int{
+		"team_a_id": teamA,
+		"team_b_id": teamB,
+		"score_a":   3,
+		"score_b":   1,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("creando partido: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doRequest(t, h, http.MethodDelete, "/matches/1", nil)
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Fatalf("borrando partido: status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteEntidadIDInvalidoDevuelve400(t *testing.T) {
+	h := newTestServer(t, "app1")
+
+	for _, path := range []string{"/players/no-es-un-id", "/teams/no-es-un-id", "/matches/no-es-un-id"} {
+		t.Run(path, func(t *testing.T) {
+			rec := doRequest(t, h, http.MethodDelete, path, nil)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, esperaba %d", rec.Code, http.StatusBadRequest)
+			}
+		})
 	}
 }
 

@@ -89,39 +89,55 @@ func extractRedisAddrFlag(args []string) (string, []string) {
 	return addr, rest
 }
 
-// runPlayer maneja los subcomandos "player add" y "player list".
+// runPlayer maneja los subcomandos "player add", "player list" y "player del".
 func runPlayer(ctx context.Context, s *store.Store, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("uso: gepa player <add|list> ...")
+		return fmt.Errorf("uso: gepa player <add|list|del> ...")
 	}
 	switch args[0] {
 	case "add":
-		if len(args) < 2 {
-			return fmt.Errorf("uso: gepa player add <nombre>")
+		if len(args) < 3 {
+			return fmt.Errorf("uso: gepa player add <equipo_id> <nombre>")
 		}
-		p, err := s.AddPlayer(ctx, args[1])
+		teamID, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("equipo_id inválido: %w", err)
+		}
+		p, err := s.AddPlayer(ctx, args[2], teamID)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("jugador creado: #%d %s\n", p.ID, p.Name)
+		fmt.Printf("jugador creado: #%d %s (equipo %d)\n", p.ID, p.Name, p.TeamID)
 	case "list":
 		players, err := s.ListPlayers(ctx)
 		if err != nil {
 			return err
 		}
 		for _, p := range players {
-			fmt.Printf("#%d %s\n", p.ID, p.Name)
+			fmt.Printf("#%d %s (equipo %d)\n", p.ID, p.Name, p.TeamID)
 		}
+	case "del":
+		if len(args) < 2 {
+			return fmt.Errorf("uso: gepa player del <id>")
+		}
+		id, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("jugador_id inválido: %w", err)
+		}
+		if err := s.DeletePlayer(ctx, id); err != nil {
+			return err
+		}
+		fmt.Printf("jugador eliminado: #%d\n", id)
 	default:
 		return fmt.Errorf("subcomando desconocido: player %s", args[0])
 	}
 	return nil
 }
 
-// runTeam maneja los subcomandos "team add" y "team list".
+// runTeam maneja los subcomandos "team add", "team list" y "team del".
 func runTeam(ctx context.Context, s *store.Store, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("uso: gepa team <add|list> ...")
+		return fmt.Errorf("uso: gepa team <add|list|del> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -141,17 +157,29 @@ func runTeam(ctx context.Context, s *store.Store, args []string) error {
 		for _, t := range teams {
 			fmt.Printf("#%d %s\n", t.ID, t.Name)
 		}
+	case "del":
+		if len(args) < 2 {
+			return fmt.Errorf("uso: gepa team del <id>")
+		}
+		id, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("equipo_id inválido: %w", err)
+		}
+		if err := s.DeleteTeam(ctx, id); err != nil {
+			return err
+		}
+		fmt.Printf("equipo eliminado: #%d\n", id)
 	default:
 		return fmt.Errorf("subcomando desconocido: team %s", args[0])
 	}
 	return nil
 }
 
-// runMatch maneja los subcomandos "match add" y "match list". Los equipos se
+// runMatch maneja los subcomandos "match add", "match list" y "match del". Los equipos se
 // referencian por ID (los mismos que muestra "team list").
 func runMatch(ctx context.Context, s *store.Store, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("uso: gepa match <add|list> ...")
+		return fmt.Errorf("uso: gepa match <add|list|del> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -187,6 +215,18 @@ func runMatch(ctx context.Context, s *store.Store, args []string) error {
 		for _, m := range matches {
 			fmt.Printf("#%d equipo %d %d - %d equipo %d\n", m.ID, m.TeamAID, m.ScoreA, m.ScoreB, m.TeamBID)
 		}
+	case "del":
+		if len(args) < 2 {
+			return fmt.Errorf("uso: gepa match del <id>")
+		}
+		id, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("partido_id inválido: %w", err)
+		}
+		if err := s.DeleteMatch(ctx, id); err != nil {
+			return err
+		}
+		fmt.Printf("partido eliminado: #%d\n", id)
 	default:
 		return fmt.Errorf("subcomando desconocido: match %s", args[0])
 	}
@@ -237,12 +277,15 @@ func printUsage() {
 	fmt.Println(`gepa-cli: gestión simple de jugadores, equipos y partidos
 
 Uso:
-  gepa [--redis-addr <host:puerto>] player add <nombre>
+  gepa [--redis-addr <host:puerto>] player add <equipo_id> <nombre>
   gepa [--redis-addr <host:puerto>] player list
+  gepa [--redis-addr <host:puerto>] player del <id>
   gepa [--redis-addr <host:puerto>] team add <nombre>
   gepa [--redis-addr <host:puerto>] team list
+  gepa [--redis-addr <host:puerto>] team del <id>
   gepa [--redis-addr <host:puerto>] match add <equipoA_id> <equipoB_id> <marcadorA> <marcadorB>
   gepa [--redis-addr <host:puerto>] match list
+  gepa [--redis-addr <host:puerto>] match del <id>
   gepa [--redis-addr <host:puerto>] serve [addr]   (por defecto :8080)
 
 Redis por defecto: localhost:6379 (override con --redis-addr o REDIS_ADDR).`)

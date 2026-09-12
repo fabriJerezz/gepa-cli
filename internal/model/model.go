@@ -3,10 +3,11 @@
 // dependencias de almacenamiento (eso vive en internal/store).
 package model
 
-// Player representa un jugador identificado únicamente por su nombre.
+// Player representa un jugador con nombre y pertenencia a un equipo.
 type Player struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID     int    `json:"id"`
+	Name   string `json:"name"`
+	TeamID int    `json:"team_id"`
 }
 
 // Team representa un equipo.

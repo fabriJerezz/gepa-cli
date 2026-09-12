@@ -17,7 +17,7 @@ func TestMountSirveInterfazYAssets(t *testing.T) {
 		contentType string
 		body        string
 	}{
-		{name: "pagina principal", path: "/", contentType: "text/html", body: "GEPA"},
+		{name: "pagina principal", path: "/", contentType: "text/html", body: "FutGo"},
 		{name: "hoja de estilos", path: "/assets/app.css", contentType: "text/css"},
 		{name: "javascript", path: "/assets/app.js", contentType: ""},
 	}

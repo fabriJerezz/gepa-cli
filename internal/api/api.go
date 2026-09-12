@@ -1,14 +1,16 @@
 // Package api expone la funcionalidad del store como una API REST en JSON.
-// Cada recurso (players, teams, matches) tiene un GET para listar y un POST
-// para crear; los handlers son delgados a propósito, toda la validación de
+// Cada recurso (players, teams, matches) tiene endpoints para listar, crear y
+// eliminar; los handlers son delgados a propósito, toda la validación de
 // negocio vive en internal/store.
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"gepa-cli/internal/store"
 	"gepa-cli/internal/web"
@@ -30,12 +32,15 @@ func NewServer(s *store.Store, instanceName string) http.Handler {
 
 	mux.HandleFunc("GET /players", handleListPlayers(s))
 	mux.HandleFunc("POST /players", handleCreatePlayer(s))
+	mux.HandleFunc("DELETE /players/{id}", handleDeletePlayer(s))
 
 	mux.HandleFunc("GET /teams", handleListTeams(s))
 	mux.HandleFunc("POST /teams", handleCreateTeam(s))
+	mux.HandleFunc("DELETE /teams/{id}", handleDeleteTeam(s))
 
 	mux.HandleFunc("GET /matches", handleListMatches(s))
 	mux.HandleFunc("POST /matches", handleCreateMatch(s))
+	mux.HandleFunc("DELETE /matches/{id}", handleDeleteMatch(s))
 
 	web.Mount(mux)
 
@@ -83,10 +88,16 @@ func handleHealth(instanceName string) http.HandlerFunc {
 	}
 }
 
-// createNameRequest es el body esperado tanto para crear jugadores como
-// equipos: ambos solo necesitan un nombre.
+// createNameRequest es el body esperado para crear equipos.
 type createNameRequest struct {
 	Name string `json:"name"`
+}
+
+// createPlayerRequest es el body esperado para crear un jugador asociado a un
+// equipo existente.
+type createPlayerRequest struct {
+	Name   string `json:"name"`
+	TeamID int    `json:"team_id"`
 }
 
 func handleListPlayers(s *store.Store) http.HandlerFunc {
@@ -102,18 +113,26 @@ func handleListPlayers(s *store.Store) http.HandlerFunc {
 
 func handleCreatePlayer(s *store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req createNameRequest
+		var req createPlayerRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "body inválido: "+err.Error())
 			return
 		}
-		p, err := s.AddPlayer(r.Context(), req.Name)
+		p, err := s.AddPlayer(r.Context(), req.Name, req.TeamID)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			status := http.StatusBadRequest
+			if errors.Is(err, store.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, p)
 	}
+}
+
+func handleDeletePlayer(s *store.Store) http.HandlerFunc {
+	return handleDelete(s.DeletePlayer)
 }
 
 func handleListTeams(s *store.Store) http.HandlerFunc {
@@ -141,6 +160,10 @@ func handleCreateTeam(s *store.Store) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusCreated, t)
 	}
+}
+
+func handleDeleteTeam(s *store.Store) http.HandlerFunc {
+	return handleDelete(s.DeleteTeam)
 }
 
 func handleListMatches(s *store.Store) http.HandlerFunc {
@@ -183,6 +206,34 @@ func handleCreateMatch(s *store.Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusCreated, m)
+	}
+}
+
+func handleDeleteMatch(s *store.Store) http.HandlerFunc {
+	return handleDelete(s.DeleteMatch)
+}
+
+func handleDelete(deleteEntity func(context.Context, int) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "id inválido: "+err.Error())
+			return
+		}
+
+		if err := deleteEntity(r.Context(), id); err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, store.ErrNotFound):
+				status = http.StatusNotFound
+			case errors.Is(err, store.ErrConflict):
+				status = http.StatusConflict
+			}
+			writeError(w, status, err.Error())
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

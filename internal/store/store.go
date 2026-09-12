@@ -30,6 +30,10 @@ import (
 // al crear un partido) no existe en la base de datos.
 var ErrNotFound = errors.New("no encontrado")
 
+// ErrConflict se devuelve cuando una operación no puede realizarse por las
+// relaciones actuales entre entidades.
+var ErrConflict = errors.New("no se puede eliminar")
+
 // Claves (keys) de Redis usadas por el store. Centralizadas acá para evitar
 // strings mágicos repetidos en cada método.
 const (
@@ -65,11 +69,22 @@ func (s *Store) Close() error {
 	return s.rdb.Close()
 }
 
-// AddPlayer crea un jugador con el nombre dado, le asigna un ID
+// AddPlayer crea un jugador asociado a un equipo existente, le asigna un ID
 // autoincremental y lo guarda en el hash de jugadores.
-func (s *Store) AddPlayer(ctx context.Context, name string) (model.Player, error) {
+func (s *Store) AddPlayer(ctx context.Context, name string, teamID int) (model.Player, error) {
 	if name == "" {
 		return model.Player{}, errors.New("el nombre no puede estar vacío")
+	}
+	if teamID == 0 {
+		return model.Player{}, errors.New("el jugador debe pertenecer a un equipo")
+	}
+
+	ok, err := s.teamExists(ctx, teamID)
+	if err != nil {
+		return model.Player{}, err
+	}
+	if !ok {
+		return model.Player{}, fmt.Errorf("equipo %d: %w", teamID, ErrNotFound)
 	}
 
 	id, err := s.rdb.Incr(ctx, seqPlayer).Result()
@@ -77,7 +92,7 @@ func (s *Store) AddPlayer(ctx context.Context, name string) (model.Player, error
 		return model.Player{}, fmt.Errorf("generando id: %w", err)
 	}
 
-	p := model.Player{ID: int(id), Name: name}
+	p := model.Player{ID: int(id), Name: name, TeamID: teamID}
 	if err := s.hsetJSON(ctx, keyPlayers, p.ID, p); err != nil {
 		return model.Player{}, err
 	}
@@ -101,6 +116,18 @@ func (s *Store) ListPlayers(ctx context.Context) ([]model.Player, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// DeletePlayer elimina un jugador por ID.
+func (s *Store) DeletePlayer(ctx context.Context, id int) error {
+	deleted, err := s.rdb.HDel(ctx, keyPlayers, strconv.Itoa(id)).Result()
+	if err != nil {
+		return fmt.Errorf("eliminando jugador %d: %w", id, err)
+	}
+	if deleted == 0 {
+		return fmt.Errorf("jugador %d: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 // AddTeam crea un equipo con el nombre dado y lo persiste.
@@ -155,6 +182,45 @@ func (s *Store) GetTeam(ctx context.Context, id int) (model.Team, error) {
 		return model.Team{}, fmt.Errorf("decodificando equipo: %w", err)
 	}
 	return t, nil
+}
+
+// DeleteTeam elimina un equipo solo cuando no tiene jugadores ni partidos
+// asociados.
+func (s *Store) DeleteTeam(ctx context.Context, id int) error {
+	if ok, err := s.teamExists(ctx, id); err != nil {
+		return err
+	} else if !ok {
+		return fmt.Errorf("equipo %d: %w", id, ErrNotFound)
+	}
+
+	players, err := s.ListPlayers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, player := range players {
+		if player.TeamID == id {
+			return fmt.Errorf("el equipo tiene jugadores: %w", ErrConflict)
+		}
+	}
+
+	matches, err := s.ListMatches(ctx)
+	if err != nil {
+		return err
+	}
+	for _, match := range matches {
+		if match.TeamAID == id || match.TeamBID == id {
+			return fmt.Errorf("el equipo tiene partidos: %w", ErrConflict)
+		}
+	}
+
+	deleted, err := s.rdb.HDel(ctx, keyTeams, strconv.Itoa(id)).Result()
+	if err != nil {
+		return fmt.Errorf("eliminando equipo %d: %w", id, err)
+	}
+	if deleted == 0 {
+		return fmt.Errorf("equipo %d: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 // teamExists chequea la existencia de un equipo sin traer/decodificar todo
@@ -229,6 +295,18 @@ func (s *Store) ListMatches(ctx context.Context) ([]model.Match, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+// DeleteMatch elimina un partido por ID.
+func (s *Store) DeleteMatch(ctx context.Context, id int) error {
+	deleted, err := s.rdb.HDel(ctx, keyMatches, strconv.Itoa(id)).Result()
+	if err != nil {
+		return fmt.Errorf("eliminando partido %d: %w", id, err)
+	}
+	if deleted == 0 {
+		return fmt.Errorf("partido %d: %w", id, ErrNotFound)
+	}
+	return nil
 }
 
 // hsetJSON serializa v como JSON y lo guarda en el campo `id` del hash

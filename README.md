@@ -5,7 +5,7 @@
 
 - gestionador de partidos
 
-CLI simple en Go para administrar **jugadores** (solo nombre), **equipos** y
+CLI simple en Go para administrar **jugadores** (nombre y equipo), **equipos** y
 **partidos** (con resultado entre dos equipos). Además de la línea de
 comandos, expone una **API REST** que opera sobre los mismos datos.
 
@@ -83,7 +83,7 @@ Nginx. Podés comprobarlo creando un dato en una instancia y leyéndolo
 desde otra:
 
 ```bash
-curl -X POST localhost:8081/players -d '{"name":"Compartido entre instancias"}'
+curl -X POST localhost:8081/players -d '{"name":"Compartido entre instancias","team_id":1}'
 curl localhost:8081/players   # lo ves
 curl localhost:8082/players   # también: es el mismo Redis
 curl localhost:8083/players   # también
@@ -115,7 +115,8 @@ Para usar la **CLI** contra la app, corré un contenedor puntual (ya apunta
 al Redis compartido):
 
 ```bash
-docker compose run --rm app1 player add "Lionel Messi"
+docker compose run --rm app1 team add "Argentina"
+docker compose run --rm app1 player add 1 "Lionel Messi"
 docker compose run --rm app1 player list
 ```
 
@@ -147,7 +148,7 @@ REDIS_ADDR=localhost:6390 ./gepa-cli team list
 
 ```bash
 # Jugadores
-./gepa-cli player add "Lionel Messi"
+./gepa-cli player add 1 "Lionel Messi"
 ./gepa-cli player list
 
 # Equipos
@@ -282,11 +283,14 @@ volvió sola a 7/7/7.
 |--------|-------------|---------------------------------------|
 | GET    | `/health`   | Chequeo de salud (incluye `instance`) |
 | GET    | `/players`  | Lista todos los jugadores             |
-| POST   | `/players`  | Crea un jugador (`{"name": "..."}`)   |
+| POST   | `/players`  | Crea un jugador (`{"name": "...", "team_id": 1}`) |
+| DELETE | `/players/{id}` | Elimina un jugador                    |
 | GET    | `/teams`    | Lista todos los equipos               |
 | POST   | `/teams`    | Crea un equipo (`{"name": "..."}`)    |
+| DELETE | `/teams/{id}` | Elimina un equipo sin relaciones      |
 | GET    | `/matches`  | Lista todos los partidos              |
 | POST   | `/matches`  | Crea un partido                       |
+| DELETE | `/matches/{id}` | Elimina un partido                    |
 
 Body para crear un partido:
 
@@ -302,12 +306,12 @@ Body para crear un partido:
 ### Ejemplos con curl
 
 ```bash
-curl -X POST localhost:8080/players -d '{"name":"Lionel Messi"}'
-curl localhost:8080/players
-
 curl -X POST localhost:8080/teams -d '{"name":"Argentina"}'
 curl -X POST localhost:8080/teams -d '{"name":"Francia"}'
 curl localhost:8080/teams
+
+curl -X POST localhost:8080/players -d '{"name":"Lionel Messi","team_id":1}'
+curl localhost:8080/players
 
 curl -X POST localhost:8080/matches -d '{"team_a_id":1,"team_b_id":2,"score_a":3,"score_b":3}'
 curl localhost:8080/matches
