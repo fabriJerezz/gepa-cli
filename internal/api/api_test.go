@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -68,6 +69,24 @@ func TestHealth(t *testing.T) {
 	}
 	if body["instance"] != "app1" {
 		t.Errorf("body.instance = %q, esperaba %q", body["instance"], "app1")
+	}
+}
+
+func TestFrontendMantieneInstancia(t *testing.T) {
+	h := newTestServer(t, "app1")
+
+	rec := doRequest(t, h, http.MethodGet, "/", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, esperaba %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/html") {
+		t.Errorf("Content-Type = %q, esperaba HTML", got)
+	}
+	if !strings.Contains(rec.Body.String(), "GEPA") {
+		t.Error("el frontend no contiene la marca GEPA")
+	}
+	if got := rec.Header().Get("X-Instance"); got != "app1" {
+		t.Errorf("X-Instance = %q, esperaba %q", got, "app1")
 	}
 }
 

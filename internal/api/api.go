@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"gepa-cli/internal/store"
+	"gepa-cli/internal/web"
 )
 
 // NewServer arma el mux con todas las rutas de la API y le agrega los
@@ -35,6 +36,8 @@ func NewServer(s *store.Store, instanceName string) http.Handler {
 
 	mux.HandleFunc("GET /matches", handleListMatches(s))
 	mux.HandleFunc("POST /matches", handleCreateMatch(s))
+
+	web.Mount(mux)
 
 	return logMiddleware(instanceMiddleware(instanceName, mux))
 }

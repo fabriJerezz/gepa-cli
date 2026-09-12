@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0a120e">
+    <title>GEPA — Gestión de partidos</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/assets/app.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div class="site-shell">
+      <main class="ticket" aria-labelledby="page-title">
+        <header class="ticket-header">
+          <div class="brand-lockup">
+            <p class="kicker">Cartelera de cancha</p>
+            <h1 id="page-title">GEPA</h1>
+            <p class="subtitle">Gestión de partidos</p>
+          </div>
+          <div class="instance-pill" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="instance-label">Instancia</span>
+            <strong id="instance-value">Conectando…</strong>
+          </div>
+        </header>
+
+        <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+        <div class="dashboard-grid">
+          <section class="panel" aria-labelledby="players-title">
+            <div class="panel-heading">
+              <span class="panel-number">01</span>
+              <div>
+                <p class="kicker">Plantel</p>
+                <h2 id="players-title">Jugadores</h2>
+              </div>
+            </div>
+            <ul id="players-list" class="entity-list" aria-live="polite"></ul>
+            <form id="player-form" class="compact-form">
+              <label for="player-name">Nombre del jugador</label>
+              <div class="form-row">
+                <input id="player-name" name="name" type="text" autocomplete="off" placeholder="Ej. Lionel Messi" required>
+                <button type="submit">Agregar</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel" aria-labelledby="teams-title">
+            <div class="panel-heading">
+              <span class="panel-number">02</span>
+              <div>
+                <p class="kicker">Competencia</p>
+                <h2 id="teams-title">Equipos</h2>
+              </div>
+            </div>
+            <ul id="teams-list" class="entity-list" aria-live="polite"></ul>
+            <form id="team-form" class="compact-form">
+              <label for="team-name">Nombre del equipo</label>
+              <div class="form-row">
+                <input id="team-name" name="name" type="text" autocomplete="off" placeholder="Ej. Las Estrellas" required>
+                <button type="submit">Agregar</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel match-panel" aria-labelledby="matches-title">
+            <div class="panel-heading">
+              <span class="panel-number">03</span>
+              <div>
+                <p class="kicker">Resultados</p>
+                <h2 id="matches-title">Partidos</h2>
+              </div>
+            </div>
+            <div id="matches-list" class="match-list" aria-live="polite"></div>
+            <form id="match-form" class="compact-form match-form">
+              <div class="match-teams">
+                <div>
+                  <label for="team-a">Equipo local</label>
+                  <select id="team-a" name="team_a_id" required></select>
+                </div>
+                <div>
+                  <label for="team-b">Equipo visitante</label>
+                  <select id="team-b" name="team_b_id" required></select>
+                </div>
+              </div>
+              <div class="score-fields">
+                <div>
+                  <label for="score-a">Goles local</label>
+                  <input id="score-a" name="score_a" type="number" min="0" value="0" required>
+                </div>
+                <div>
+                  <label for="score-b">Goles visitante</label>
+                  <input id="score-b" name="score_b" type="number" min="0" value="0" required>
+                </div>
+                <button type="submit" id="match-submit" disabled>Registrar</button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <footer class="ticket-footer">
+          <span>Temporada abierta</span>
+          <span>·</span>
+          <span>Datos en vivo</span>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>
