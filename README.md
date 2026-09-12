@@ -313,6 +313,60 @@ curl -X POST localhost:8080/matches -d '{"team_a_id":1,"team_b_id":2,"score_a":3
 curl localhost:8080/matches
 ```
 
+## Desplegar en la nube (Oracle Cloud Always Free)
+
+Elegimos Oracle Cloud porque su tier *Always Free* es gratis de verdad y no
+expira (no es un trial con créditos). La VM no compila nada: baja del
+registry la imagen que ya construyó y testeó el CI.
+
+**1. Crear la VM.** En [cloud.oracle.com](https://cloud.oracle.com) →
+*Compute* → *Create Instance*:
+
+- Shape: **VM.Standard.A1.Flex** (Ampere, Always Free), p. ej. 2 OCPU / 12 GB.
+- Imagen: **Ubuntu 22.04 (aarch64)**.
+- Agregar tu clave SSH pública y anotar la **IP pública**.
+
+> La VM es **ARM**, no x86. Por eso el workflow publica la imagen para
+> `linux/arm64` además de `amd64`: si solo publicáramos amd64, acá no
+> arrancaría.
+
+**2. Abrir el puerto 80.** En la VCN → *Security Lists* → regla de Ingress:
+origen `0.0.0.0/0`, TCP, puerto `80`.
+
+> Trampa clásica de Oracle: además de la Security List, la imagen de Ubuntu
+> trae reglas de `iptables` locales que bloquean igual. Si desde afuera no
+> responde, dentro de la VM: `sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT`
+
+**3. Instalar Docker** (por SSH: `ssh ubuntu@<IP_PUBLICA>`):
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+**4. Levantar el stack desde el registry:**
+
+```bash
+git clone https://github.com/fabriJerezz/gepa-cli.git
+cd gepa-cli
+docker compose -f docker-compose.cloud.yml up -d
+```
+
+> ¿Por qué clonamos el repo si la imagen ya está publicada? Por los
+> archivos de **configuración**, no por el código: la VM necesita
+> `docker-compose.cloud.yml` y `nginx.conf`. El código Go nunca se compila
+> acá — de hecho la VM no tiene Go instalado.
+
+**5. Probar desde tu máquina:**
+
+```bash
+curl http://<IP_PUBLICA>/health
+for i in $(seq 1 15); do curl -s -D - -o /dev/null http://<IP_PUBLICA>/health | grep -i x-instance; done | sort | uniq -c
+```
+
+**Actualizar a una versión nueva** (después de que el CI publique la
+imagen): `docker compose -f docker-compose.cloud.yml pull && docker compose -f docker-compose.cloud.yml up -d`
+
 ## Estructura del proyecto
 
 ```
