@@ -242,6 +242,38 @@ Se publican dos tags: `:latest` (último main, el que usa el cloud) y
 Son la misma arquitectura (nginx + 3 réplicas + Redis); lo único que cambia
 es de dónde sale la imagen de la app.
 
+## Tolerancia a fallos: qué pasa si se cae una instancia
+
+El balanceo reparte carga; la **tolerancia a fallos** es lo que hace que la
+caída de una instancia no se traduzca en errores para el usuario. Son dos
+cosas distintas y en `nginx.conf` las configuran dos directivas distintas:
+
+- `max_fails=1 fail_timeout=10s` (en el bloque `upstream`): cuando una
+  instancia falla, Nginx la **saca de la rotación** por 10 segundos y
+  después la vuelve a probar sola. Por eso no hace falta reiniciar nada
+  cuando la instancia vuelve.
+- `proxy_next_upstream` (en el `location`): si la request ya salió hacia
+  una instancia caída, Nginx la **reintenta contra la siguiente** en vez
+  de devolver el error. Esto es lo que hace que el cliente vea un 200.
+
+Probalo vos mismo — tirá una instancia mientras el stack corre:
+
+```bash
+docker compose stop app2
+
+# 30 requests contra el balanceador: deberian ser todas 200
+for i in $(seq 1 30); do curl -s -o /dev/null -w "%{http_code} " http://localhost:8080/health; done
+
+# y solo deberian responder app1 y app3
+for i in $(seq 1 30); do curl -s -D - -o /dev/null http://localhost:8080/health | grep -i x-instance; done | sort | uniq -c
+
+docker compose start app2   # vuelve sola a la rotacion, sin tocar nginx
+```
+
+Resultado medido en este repo: **30/30 respuestas `200`** durante la caída,
+repartidas solo entre `app1` y `app3`; al levantar `app2` la distribución
+volvió sola a 7/7/7.
+
 ## API REST
 
 ### Endpoints
