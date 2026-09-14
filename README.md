@@ -17,7 +17,7 @@ Los datos se persisten en **Redis**, así que la CLI, la API y la interfaz web
 ## Requisitos
 
 - Docker y Docker Compose (forma recomendada), **o**
-- Go 1.22+ y un Redis accesible en `localhost:6379` (para correr sin Docker)
+- Go 1.22+ y un Redis accesible en `localhost:6379` (para correr sin Docker).
 
 ## Levantar todo con Docker Compose (recomendado)
 
