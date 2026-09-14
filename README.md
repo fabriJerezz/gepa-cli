@@ -1,9 +1,10 @@
-# gepa-cli
+# FutGo-cli
 
 [![CI](https://github.com/fabriJerezz/gepa-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/fabriJerezz/gepa-cli/actions/workflows/ci.yml)
 [![SAST](https://github.com/fabriJerezz/gepa-cli/actions/workflows/sast.yml/badge.svg)](https://github.com/fabriJerezz/gepa-cli/actions/workflows/sast.yml)
 
-- gestionador de partidos
+**App en producción:** https://futgo-cli.onrender.com
+
 
 CLI simple en Go para administrar **jugadores** (nombre y equipo), **equipos** y
 **partidos** (con resultado entre dos equipos). Además de la línea de
@@ -222,10 +223,13 @@ exacto que pasó por CI, sin recompilar nada.
 Dos detalles del workflow que no son obvios:
 
 - **Multi-arquitectura** (`linux/amd64,linux/arm64`): una imagen compilada
-  para x86 no arranca en un CPU ARM. Como la VM gratis de Oracle Cloud es
-  ARM (Ampere), el workflow usa QEMU para emular esa arquitectura y meter
-  las dos variantes en la misma imagen. Después `docker pull` baja
-  automáticamente la que corresponde a cada máquina.
+  para x86 no arranca en un CPU ARM. Publicar las dos variantes dentro de la
+  misma imagen la vuelve portable entre arquitecturas: las máquinas de
+  desarrollo con Apple Silicon son `arm64`, Render corre sobre `amd64`, y si
+  en el futuro se retoma el camino de desplegar en una VM ARM se puede hacer
+  sin rebuildear nada. El workflow usa QEMU para emular la arquitectura que
+  no es la del runner; después `docker pull` baja automáticamente la que
+  corresponde a cada máquina.
 - **Sin secrets**: GHCR se autentica con el `GITHUB_TOKEN` que GitHub le
   inyecta al workflow. Con Docker Hub habría que crear un access token a
   mano y guardarlo como secret del repo.
@@ -238,10 +242,16 @@ Se publican dos tags: `:latest` (último main, el que usa el cloud) y
 | Archivo | Apps | Para qué |
 |---------|------|----------|
 | `docker-compose.yml` | `build: .` | Desarrollo: compila desde el código que tenés al lado |
-| `docker-compose.cloud.yml` | `image: ghcr.io/...` | Despliegue: baja la imagen publicada, no necesita el código |
+| `docker-compose.cloud.yml` | `image: ghcr.io/...` | Despliegue sobre un servidor propio: baja la imagen publicada, no necesita el código |
 
 Son la misma arquitectura (nginx + 3 réplicas + Redis); lo único que cambia
 es de dónde sale la imagen de la app.
+
+`docker-compose.cloud.yml` es el camino para levantar el stack completo en
+una VM propia y sigue siendo válido para eso, pero **no es lo que corre hoy
+en producción**: el despliegue en la nube usa la imagen de GHCR directo en
+Render, sin compose (ver [Desplegar en la
+nube](#desplegar-en-la-nube-render)).
 
 ## Tolerancia a fallos: qué pasa si se cae una instancia
 
@@ -317,59 +327,129 @@ curl -X POST localhost:8080/matches -d '{"team_a_id":1,"team_b_id":2,"score_a":3
 curl localhost:8080/matches
 ```
 
-## Desplegar en la nube (Oracle Cloud Always Free)
+## Desplegar en la nube (Render)
 
-Elegimos Oracle Cloud porque su tier *Always Free* es gratis de verdad y no
-expira (no es un trial con créditos). La VM no compila nada: baja del
-registry la imagen que ya construyó y testeó el CI.
+La app está publicada en **https://futgo-cli.onrender.com**, corriendo en
+[Render](https://render.com) como un único **Web Service** del plan Free en
+la región **Oregon (US West)**.
 
-**1. Crear la VM.** En [cloud.oracle.com](https://cloud.oracle.com) →
-*Compute* → *Create Instance*:
+Llegamos a Render después de que tres proveedores de VMs nos rechazaran la
+cuenta (el detalle está [más
+abajo](#el-camino-hasta-render-tres-proveedores-rechazados)). Más allá de que
+no exige tarjeta de crédito, lo que lo hace encajar con este proyecto es que
+puede desplegar **directamente desde una imagen ya publicada en un
+registry** — que es exactamente el artefacto que produce nuestro CD. Render
+no compila nada: baja de GHCR la misma imagen que construyó y testeó el
+pipeline.
 
-- Shape: **VM.Standard.A1.Flex** (Ampere, Always Free), p. ej. 2 OCPU / 12 GB.
-- Imagen: **Ubuntu 22.04 (aarch64)**.
-- Agregar tu clave SSH pública y anotar la **IP pública**.
+**1. Crear primero la base de datos (Key Value).** En el dashboard →
+*New* → *Key Value*, plan **Free**, región **Oregon**. Al terminar, Render
+muestra la dirección interna del servicio, con forma `redis://red-xxxx:6379`.
 
-> La VM es **ARM**, no x86. Por eso el workflow publica la imagen para
-> `linux/arm64` además de `amd64`: si solo publicáramos amd64, acá no
-> arrancaría.
+> Creá el Key Value en la **misma región** que el Web Service: la dirección
+> interna solo es alcanzable desde servicios de la misma región.
 
-**2. Abrir el puerto 80.** En la VCN → *Security Lists* → regla de Ingress:
-origen `0.0.0.0/0`, TCP, puerto `80`.
+**2. Crear el Web Service desde la imagen.** *New* → *Web Service* → la
+opción de desplegar una **imagen existente de un registry**, con:
 
-> Trampa clásica de Oracle: además de la Security List, la imagen de Ubuntu
-> trae reglas de `iptables` locales que bloquean igual. Si desde afuera no
-> responde, dentro de la VM: `sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT`
-
-**3. Instalar Docker** (por SSH: `ssh ubuntu@<IP_PUBLICA>`):
-
-```bash
-curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER && newgrp docker
+```
+ghcr.io/fabrijerezz/gepa-cli:latest
 ```
 
-**4. Levantar el stack desde el registry:**
+Plan **Free**, región **Oregon**. El paquete es público en GHCR, así que
+Render no necesita credenciales para bajarlo.
+
+**3. Configurar las variables de entorno** del Web Service:
+
+| Variable | Valor | Para qué |
+|----------|-------|----------|
+| `REDIS_ADDR` | `<host interno del Key Value>:6379` | A qué Redis se conecta la app |
+| `PORT` | `8080` | A qué puerto del contenedor rutea Render |
+| `INSTANCE_NAME` | `render` | Nombre que la app reporta en `X-Instance` y `/health` |
+
+Dos detalles que cuesta descubrir y que son la diferencia entre que el
+servicio levante o quede reiniciándose en loop:
+
+> **`REDIS_ADDR` va sin esquema.** Render entrega la dirección del Key Value
+> como una URL completa (`redis://red-xxxx:6379`), pero nuestro código lee
+> `REDIS_ADDR` con formato `host:puerto` plano (ver `extractRedisAddrFlag` en
+> `main.go`). Hay que pegarla **sin el prefijo `redis://`**. Si el valor no
+> llega bien, el binario cae al default `localhost:6379` y el contenedor se
+> muere con `connection refused`.
+
+> **`PORT=8080` no la lee la app, la lee Render.** El binario escucha en el
+> `:8080` fijo que define el `CMD` del Dockerfile y nunca mira la variable
+> `PORT`. Declarársela a Render es lo que le indica a qué puerto del
+> contenedor mandar el tráfico; sin eso, el servicio queda publicado pero
+> apuntando al puerto equivocado.
+
+**4. Probar:**
 
 ```bash
-git clone https://github.com/fabriJerezz/gepa-cli.git
-cd gepa-cli
-docker compose -f docker-compose.cloud.yml up -d
+curl https://futgo-cli.onrender.com/health
 ```
 
-> ¿Por qué clonamos el repo si la imagen ya está publicada? Por los
-> archivos de **configuración**, no por el código: la VM necesita
-> `docker-compose.cloud.yml` y `nginx.conf`. El código Go nunca se compila
-> acá — de hecho la VM no tiene Go instalado.
+El body trae el `instance` configurado (`{"status":"ok","instance":"render"}`):
+es el mismo mecanismo que en local distingue `app1`/`app2`/`app3`, acá con
+una sola instancia llamada `render`.
 
-**5. Probar desde tu máquina:**
+> **Plan Free:** el servicio se suspende tras ~15 minutos sin tráfico. La
+> primera request después de una suspensión tarda entre 30 y 60 segundos
+> mientras Render vuelve a levantar el contenedor; las siguientes responden
+> normal. Si estás probando la URL y parece caída, esperá ese rato antes de
+> asumir que algo se rompió.
 
-```bash
-curl http://<IP_PUBLICA>/health
-for i in $(seq 1 15); do curl -s -D - -o /dev/null http://<IP_PUBLICA>/health | grep -i x-instance; done | sort | uniq -c
-```
+**Actualizar a una versión nueva:** una vez que el CI publicó la imagen,
+alcanza con un *Manual Deploy* desde el dashboard, que vuelve a bajar
+`:latest` de GHCR. No hay nada que compilar ni que copiar a ningún servidor.
 
-**Actualizar a una versión nueva** (después de que el CI publique la
-imagen): `docker compose -f docker-compose.cloud.yml pull && docker compose -f docker-compose.cloud.yml up -d`
+> **¿Y el `git clone` del repo en el servidor?** Acá no hay ninguno, y vale
+> entender por qué: es la distinción entre **código** y **configuración**. El
+> código viaja dentro de la imagen — Render solo hace `pull`, nunca compila,
+> ni siquiera tiene Go. La configuración, en un despliegue sobre una VM, vive
+> en archivos del repo (`docker-compose.cloud.yml`, `nginx.conf`) y por eso
+> ahí sí hay que clonarlo; en Render, en cambio, la configuración son las
+> tres variables de entorno del servicio. Como corre un solo contenedor y sin
+> proxy propio adelante, no queda ningún archivo de config que traer.
+
+### Por qué una instancia en la nube y tres en local
+
+No son dos versiones de lo mismo con distinta ambición: son las dos cosas
+distintas que pide el enunciado, cada una en el entorno donde tiene sentido
+demostrarla.
+
+La **arquitectura completa —proxy y réplicas— corre en el entorno local**:
+`docker-compose.yml` + `nginx.conf` levantan Nginx balanceando tres réplicas
+idénticas contra un Redis compartido. Ahí es donde se demuestra el round
+robin, la tolerancia a fallos cuando se cae una instancia, y que las apps son
+realmente sin estado (todo eso está documentado más arriba, con los comandos
+para reproducirlo).
+
+De la nube, en cambio, el enunciado pide **al menos una instancia funcional
+desplegada desde el registro**, y las réplicas figuran como mejora opcional.
+Eso es exactamente lo que hace el Web Service de Render: prueba que el
+artefacto publicado en GHCR se despliega y funciona fuera de nuestra máquina,
+contra una base de datos gestionada. Agregarle réplicas y un Nginx propio
+sería repetir en la nube una demostración que el entorno local ya cubre
+entera.
+
+### El camino hasta Render: tres proveedores rechazados
+
+El plan original era desplegar sobre una VM — de ahí sale
+`docker-compose.cloud.yml`, que sigue siendo el camino válido para ese
+escenario. Ninguno de los tres proveedores que intentamos nos dejó llegar a
+tener la VM:
+
+- **Azure for Students:** la creación de la VM fallaba por cuota/capacidad.
+- **Oracle Cloud:** el registro fue rechazado por el sistema antifraude, con
+  un error genérico y sin detalle, a pesar de que la tarjeta se verificó
+  correctamente.
+- **Google Cloud:** rechazó la autorización temporal de USD 50 que hace sobre
+  la tarjeta al crear la cuenta.
+
+Render destrabó el problema por dos motivos: no exige tarjeta de crédito para
+el plan Free, y despliega desde una imagen de registry, así que el trabajo ya
+hecho en el CD se reusó tal cual.
 
 ## Estructura del proyecto
 
