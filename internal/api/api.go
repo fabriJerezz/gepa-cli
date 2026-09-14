@@ -75,9 +75,10 @@ func instanceMiddleware(instanceName string, next http.Handler) http.Handler {
 	})
 }
 
-// handleHealth es el endpoint que usa el healthcheck de Docker Compose para
-// saber si el contenedor de la app ya está listo para recibir tráfico.
-// También devuelve el nombre de la instancia en el body, para poder
+// handleHealth es el chequeo de salud de la app: devuelve el estado y el
+// nombre de la instancia que atendió la request. Se usa para verificar el
+// balanceo de carga (qué réplica respondió detrás de Nginx) y es el health
+// check path configurado en Render. Llevar la instancia en el body permite
 // identificarla aunque no se inspeccionen las cabeceras de la respuesta.
 func handleHealth(instanceName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

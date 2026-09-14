@@ -1,6 +1,8 @@
 # CD (Continuous Delivery): construye la imagen Docker y la publica en el
-# registry. Se dispara solo cuando el push a main ya pasó por CI, así que
-# lo que se publica siempre es código testeado.
+# registry. Se dispara en cada push a main, igual que ci.yml, y corre en
+# paralelo con CI sin depender de su resultado: si un push rompe los tests,
+# la imagen se publica igual. Mejora pendiente: encadenarlo a CI con
+# workflow_run, para publicar solo cuando CI terminó en verde.
 #
 # Registry: GHCR (ghcr.io), el registry de contenedores de GitHub. Lo
 # elegimos sobre Docker Hub porque no requiere crear ni guardar ninguna

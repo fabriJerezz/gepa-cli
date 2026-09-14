@@ -8,10 +8,11 @@
 
 CLI simple en Go para administrar **jugadores** (nombre y equipo), **equipos** y
 **partidos** (con resultado entre dos equipos). Además de la línea de
-comandos, expone una **API REST** que opera sobre los mismos datos.
+comandos, expone una **API REST** que opera sobre los mismos datos, y sirve
+una **interfaz web** que se abre en el navegador y consume esa misma API.
 
-Los datos se persisten en **Redis**, así que tanto la CLI como la API leen y
-escriben sobre la misma base de datos.
+Los datos se persisten en **Redis**, así que la CLI, la API y la interfaz web
+(a través de la API) leen y escriben sobre la misma base de datos.
 
 ## Requisitos
 
@@ -31,10 +32,13 @@ que balancea la carga entre ellas:
 | Servicio | Rol                                            |
 |----------|-------------------------------------------------|
 | `redis`                      | La única base de datos, compartida por las 3 instancias |
-| `app1`, `app2`, `app3`       | 3 réplicas idénticas de la misma API REST, sin estado propio |
+| `app1`, `app2`, `app3`       | 3 réplicas idénticas que sirven la interfaz web y la API REST, sin estado propio |
 | `nginx`                      | Balanceador de carga (round robin), único punto de entrada público |
 
-Punto de entrada de la aplicación (a través de Nginx):
+Punto de entrada de la aplicación (a través de Nginx). Abierta en el
+navegador, esta URL muestra la [interfaz web](#interfaz-web); la misma
+dirección es también la base de la API REST (`/health`, `/teams`,
+`/players`, `/matches`):
 
 ```
 http://localhost:8080
@@ -127,6 +131,56 @@ Apagar todo:
 docker compose down       # conserva los datos (volumen redis-data)
 docker compose down -v    # borra también los datos
 ```
+
+## Interfaz web
+
+Además de la CLI y la API, la app sirve una **interfaz web** para gestionar
+equipos, jugadores y partidos desde el navegador. No tiene lógica ni datos
+propios: todo lo que muestra y todo lo que modifica pasa por los mismos
+endpoints de la [API REST](#api-rest), así que un equipo creado desde la
+interfaz es exactamente el mismo que ves con `curl` o desde la CLI.
+
+| Entorno | URL |
+|---------|-----|
+| Local (Docker Compose, a través de Nginx) | http://localhost:8080 |
+| Producción (Render) | https://futgo-cli.onrender.com |
+
+### Decisión de diseño: el front va embebido en el binario
+
+Los archivos de la interfaz (`internal/web/assets/`: `index.html`, `app.css`
+y `app.js`) se compilan **dentro del binario de Go** con la directiva
+`go:embed` (ver `internal/web/web.go`). `web.Mount` registra sus rutas (`/` y
+`/assets/`) sobre el mismo `http.ServeMux` que arma `api.NewServer` para la
+API, así que un único proceso atiende las dos cosas. Eso conviene por tres
+motivos:
+
+- **No hace falta un contenedor extra ni un servidor de estáticos.** No hay
+  una imagen aparte para el front ni un servidor dedicado a servir archivos:
+  la imagen de la app ya los trae adentro. Y como van dentro del binario, no
+  dependen de que existan en el filesystem del contenedor, que es `scratch`
+  y no tiene nada más que el ejecutable.
+- **Front y API comparten origen.** La página se sirve desde el mismo host y
+  puerto que la API, y `app.js` le pega con rutas relativas (`/teams`,
+  `/players`, `/matches`). Para el navegador es todo el mismo origen, así que
+  no hay CORS que resolver.
+- **Cada réplica es autosuficiente.** Las 3 instancias detrás de Nginx sirven
+  la interfaz y la API a la vez: no aparece un servicio de front que sea otro
+  punto de falla ni que haya que escalar por separado. En Render pasa lo
+  mismo con su única instancia.
+
+### El indicador de instancia
+
+En el encabezado de la interfaz hay un indicador que muestra qué réplica
+respondió: `app1`, `app2` o `app3` en local, `render` en producción. Lo saca
+del campo `instance` de `GET /health`, que la interfaz consulta al cargar la
+página — es el mismo dato de [¿Cómo sé a qué instancia le
+pegué?](#cómo-sé-a-qué-instancia-le-pegué), pero visible sin abrir una
+terminal.
+
+> El indicador refleja la réplica que atendió ese `/health` puntual. Las
+> demás requests de la página también pasan por Nginx y pueden caer en otra
+> instancia; como todas comparten el mismo Redis, los datos que ves son los
+> mismos igual.
 
 ## Correr sin Docker
 
@@ -455,19 +509,25 @@ hecho en el CD se reusó tal cual.
 
 ```
 .
-├── main.go                # CLI: parseo de subcomandos y arranque del servidor
+├── main.go                   # CLI: parseo de subcomandos y arranque del servidor
 ├── internal/
-│   ├── model/              # Structs de dominio: Player, Team, Match
-│   ├── store/               # Persistencia en Redis
-│   └── api/                  # Handlers HTTP de la API REST
-├── Dockerfile               # Build multi-stage de la imagen de la app
+│   ├── model/                # Structs de dominio: Player, Team, Match
+│   ├── store/                # Persistencia en Redis
+│   ├── api/                  # Handlers HTTP de la API REST
+│   └── web/                  # Interfaz web embebida en el binario
+│       ├── web.go            # go:embed de assets/ y montaje sobre el mux
+│       └── assets/
+│           ├── index.html    # Estructura de la página
+│           ├── app.css       # Estilos
+│           └── app.js        # Consume la API REST y renderiza los datos
+├── Dockerfile                # Build multi-stage de la imagen de la app
 ├── docker-compose.yml        # LOCAL: compila la imagen (build: .)
-├── docker-compose.cloud.yml   # NUBE: baja la imagen del registry (image: ghcr.io/...)
+├── docker-compose.cloud.yml  # NUBE: baja la imagen del registry (image: ghcr.io/...)
 ├── nginx.conf                # Config del balanceador de carga (round robin)
 ├── .github/workflows/
-│   ├── ci.yml                 # Tests (go vet + go test -race)
-│   ├── sast.yml               # Análisis de seguridad (gosec)
-│   └── publish.yml            # Build multi-arch + push a GHCR
+│   ├── ci.yml                # Tests (go vet + go test -race)
+│   ├── sast.yml              # Análisis de seguridad (gosec)
+│   └── publish.yml           # Build multi-arch + push a GHCR
 └── .dockerignore
 ```
 
