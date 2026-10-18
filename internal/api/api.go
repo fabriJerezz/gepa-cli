@@ -1,7 +1,8 @@
 // Package api expone la funcionalidad del store como una API REST en JSON.
-// Cada recurso (players, teams, matches) tiene endpoints para listar, crear y
-// eliminar; los handlers son delgados a propósito, toda la validación de
-// negocio vive en internal/store.
+// Jugadores y equipos son CRUD simple; los partidos separan comandos
+// (escritura de eventos) de consultas (modelos de lectura). Los handlers son
+// delgados a propósito: la validación de negocio vive en internal/store e
+// internal/model.
 package api
 
 import (
@@ -11,7 +12,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
+	"gepa-cli/internal/model"
 	"gepa-cli/internal/store"
 	"gepa-cli/internal/web"
 )
@@ -38,13 +41,18 @@ func NewServer(s *store.Store, instanceName string) http.Handler {
 	mux.HandleFunc("POST /teams", handleCreateTeam(s))
 	mux.HandleFunc("DELETE /teams/{id}", handleDeleteTeam(s))
 
-	mux.HandleFunc("GET /matches", handleListMatches(s))
+	// Partidos con CQRS: los POST/DELETE son comandos que agregan eventos;
+	// los GET leen modelos de lectura armados por el proyector.
 	mux.HandleFunc("POST /matches", handleCreateMatch(s))
+	mux.HandleFunc("POST /matches/{id}/events", handleAppendEvent(s))
 	mux.HandleFunc("DELETE /matches/{id}", handleDeleteMatch(s))
+	mux.HandleFunc("GET /matches", handleListMatches(s))
+	mux.HandleFunc("GET /standings", handleStandings(s))
+	mux.HandleFunc("POST /projections/rebuild", handleRebuild(s))
 
 	web.Mount(mux)
 
-	return logMiddleware(instanceMiddleware(instanceName, mux))
+	return logMiddleware(instanceMiddleware(instanceName, idempotencyMiddleware(s, mux)))
 }
 
 // logMiddleware imprime método y path de cada request recibido; útil para
@@ -71,6 +79,10 @@ func logMiddleware(next http.Handler) http.Handler {
 func instanceMiddleware(instanceName string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Instance", instanceName)
+		// Hora del servidor en ms: la interfaz la usa para que el reloj del
+		// partido que dibuja no dependa de la hora de la computadora del
+		// usuario.
+		w.Header().Set("X-Server-Time", strconv.FormatInt(time.Now().UnixMilli(), 10))
 		next.ServeHTTP(w, r)
 	})
 }
@@ -178,13 +190,20 @@ func handleListMatches(s *store.Store) http.HandlerFunc {
 	}
 }
 
-// createMatchRequest es el body esperado para crear un partido: los IDs de
-// los equipos que jugaron y el resultado final de cada uno.
+// createMatchRequest es el body esperado para iniciar un partido. Ya no
+// lleva resultado: el marcador se arma con los eventos.
 type createMatchRequest struct {
 	TeamAID int `json:"team_a_id"`
 	TeamBID int `json:"team_b_id"`
-	ScoreA  int `json:"score_a"`
-	ScoreB  int `json:"score_b"`
+}
+
+// commandResult es la respuesta de un comando: solo confirma qué se escribió
+// y en qué versión quedó el partido. Para ver el estado hay que consultar el
+// lado de lectura (GET /matches), que puede tardar unos ms en reflejarlo.
+type commandResult struct {
+	MatchID int `json:"match_id"`
+	Version int `json:"version"`
+	Seq     int `json:"seq,omitempty"`
 }
 
 func handleCreateMatch(s *store.Store) http.HandlerFunc {
@@ -194,24 +213,89 @@ func handleCreateMatch(s *store.Store) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "body inválido: "+err.Error())
 			return
 		}
-		m, err := s.AddMatch(r.Context(), req.TeamAID, req.TeamBID, req.ScoreA, req.ScoreB)
+		m, err := s.StartMatch(r.Context(), req.TeamAID, req.TeamBID)
 		if err != nil {
-			// Si el error es porque un equipo no existe, devolvemos 404 en
-			// vez del 400 genérico para que el cliente pueda distinguir
-			// "datos mal formados" de "referencia inexistente".
-			status := http.StatusBadRequest
-			if errors.Is(err, store.ErrNotFound) {
-				status = http.StatusNotFound
-			}
-			writeError(w, status, err.Error())
+			writeStoreError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, m)
+		writeJSON(w, http.StatusCreated, commandResult{MatchID: m.ID, Version: m.Version})
 	}
 }
 
+// appendEventRequest es el body para registrar un evento. ExpectedVersion es
+// la versión del partido que el cliente tenía al decidir el evento: si el
+// partido cambió desde entonces, el servidor responde 409.
+//
+// El cliente no manda el minuto: lo pone el reloj del servidor. ClockSec es
+// opcional y solo sirve para fijar un instante ya transcurrido (el que
+// marcaba el reloj cuando el usuario tocó el botón).
+type appendEventRequest struct {
+	Type            model.EventType `json:"type"`
+	TeamID          int             `json:"team_id"`
+	PlayerID        int             `json:"player_id"`
+	RefSeq          int             `json:"ref_seq"`
+	Speed           int             `json:"speed"`
+	AdvanceSec      int             `json:"advance_sec"`
+	ClockSec        *int            `json:"clock_sec"`
+	ExpectedVersion *int            `json:"expected_version"`
+}
+
+func handleAppendEvent(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.PathValue("id"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "id inválido: "+err.Error())
+			return
+		}
+		var req appendEventRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "body inválido: "+err.Error())
+			return
+		}
+		expected := -1
+		if req.ExpectedVersion != nil {
+			expected = *req.ExpectedVersion
+		}
+		e, err := s.AppendEvent(r.Context(), id, expected, model.Event{
+			Type: req.Type, TeamID: req.TeamID, PlayerID: req.PlayerID, RefSeq: req.RefSeq,
+			Speed: req.Speed, AdvanceSec: req.AdvanceSec,
+		}, req.ClockSec)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, commandResult{MatchID: id, Version: e.Seq, Seq: e.Seq})
+	}
+}
+
+// handleDeleteMatch cancela el partido (agrega match_cancelled). DELETE es
+// idempotente: cancelar algo ya cancelado también responde 204.
 func handleDeleteMatch(s *store.Store) http.HandlerFunc {
-	return handleDelete(s.DeleteMatch)
+	return handleDelete(s.CancelMatch)
+}
+
+func handleStandings(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rows, err := s.Standings(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+	}
+}
+
+// handleRebuild borra los modelos de lectura y los recalcula desde los
+// eventos. Existe para demostrar que los eventos son la fuente de verdad.
+func handleRebuild(s *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		n, err := s.Rebuild(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]int{"matches": n})
+	}
 }
 
 func handleDelete(deleteEntity func(context.Context, int) error) http.HandlerFunc {
@@ -223,14 +307,7 @@ func handleDelete(deleteEntity func(context.Context, int) error) http.HandlerFun
 		}
 
 		if err := deleteEntity(r.Context(), id); err != nil {
-			status := http.StatusInternalServerError
-			switch {
-			case errors.Is(err, store.ErrNotFound):
-				status = http.StatusNotFound
-			case errors.Is(err, store.ErrConflict):
-				status = http.StatusConflict
-			}
-			writeError(w, status, err.Error())
+			writeStoreError(w, err)
 			return
 		}
 
@@ -244,6 +321,22 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeStoreError traduce un error del store al status HTTP que corresponde.
+// Los errores de reglas de negocio (validaciones) son 400.
+func writeStoreError(w http.ResponseWriter, err error) {
+	var verr *store.VersionError
+	switch {
+	case errors.As(err, &verr):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "current_version": verr.Current})
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, store.ErrConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusBadRequest, err.Error())
+	}
 }
 
 // writeError responde con un JSON {"error": msg} y el status dado.

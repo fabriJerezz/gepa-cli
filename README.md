@@ -14,6 +14,18 @@ una **interfaz web** que se abre en el navegador y consume esa misma API.
 Los datos se persisten en **Redis**, así que la CLI, la API y la interfaz web
 (a través de la API) leen y escriben sobre la misma base de datos.
 
+Los partidos se registran **en vivo, como una secuencia de eventos** (goles,
+tarjetas, anulaciones, final), con un **reloj de partido** que se adelanta a
+mano o corre solo más rápido que el real. A partir de los eventos se calcula
+la **tabla de posiciones**. Para eso la app aplica **Event Sourcing**, **CQRS** e
+**idempotencia**:
+
+- [docs/teoria.md](docs/teoria.md): qué es cada concepto y por qué lo usamos.
+- [docs/tecnica.md](docs/tecnica.md): cómo está implementado, endpoints y
+  claves de Redis.
+- [docs/demo.md](docs/demo.md): guion de la presentación (15 minutos), con
+  dónde se ve e implementa cada concepto.
+
 ## Requisitos
 
 - Docker y Docker Compose (forma recomendada), **o**
@@ -172,15 +184,14 @@ motivos:
 
 En el encabezado de la interfaz hay un indicador que muestra qué réplica
 respondió: `app1`, `app2` o `app3` en local, `render` en producción. Lo saca
-del campo `instance` de `GET /health`, que la interfaz consulta al cargar la
-página — es el mismo dato de [¿Cómo sé a qué instancia le
-pegué?](#cómo-sé-a-qué-instancia-le-pegué), pero visible sin abrir una
-terminal.
+de la cabecera `X-Instance` de cada respuesta — es el mismo dato de [¿Cómo sé
+a qué instancia le pegué?](#cómo-sé-a-qué-instancia-le-pegué), pero visible
+sin abrir una terminal. Como la interfaz refresca los datos cada 3 segundos,
+el indicador va rotando entre las réplicas: es el round robin en vivo.
 
-> El indicador refleja la réplica que atendió ese `/health` puntual. Las
-> demás requests de la página también pasan por Nginx y pueden caer en otra
-> instancia; como todas comparten el mismo Redis, los datos que ves son los
-> mismos igual.
+Además, el panel **Registro de requests** muestra qué réplica atendió cada
+comando y si fue un reintento detectado por la idempotency key (ver
+[docs/tecnica.md](docs/tecnica.md#interfaz-web)).
 
 ## Correr sin Docker
 
@@ -212,9 +223,16 @@ REDIS_ADDR=localhost:6390 ./gepa-cli team list
 ./gepa-cli team list
 
 # Partidos (usa los IDs de equipo mostrados en `team list`)
-./gepa-cli match add 1 2 3 3
+./gepa-cli match add 1 2 3 3   # carga un partido ya jugado (genera sus eventos)
 ./gepa-cli match list
+./gepa-cli match del 1         # cancela el partido
+
+# Tabla de posiciones
+./gepa-cli standings
+./gepa-cli rebuild             # la recalcula desde los eventos
 ```
+
+Los partidos en vivo (gol a gol) se cargan desde la interfaz web o la API.
 
 ### Levantar la API
 
@@ -352,20 +370,17 @@ volvió sola a 7/7/7.
 | GET    | `/teams`    | Lista todos los equipos               |
 | POST   | `/teams`    | Crea un equipo (`{"name": "..."}`)    |
 | DELETE | `/teams/{id}` | Elimina un equipo sin relaciones      |
-| GET    | `/matches`  | Lista todos los partidos              |
-| POST   | `/matches`  | Crea un partido                       |
-| DELETE | `/matches/{id}` | Elimina un partido                    |
+| POST   | `/matches`  | Inicia un partido (`{"team_a_id": 1, "team_b_id": 2}`) |
+| POST   | `/matches/{id}/events` | Registra un evento (gol, tarjeta, anulación, final) |
+| DELETE | `/matches/{id}` | Cancela un partido (idempotente)      |
+| GET    | `/matches`  | Partidos con marcador, estado y relato |
+| GET    | `/standings` | Tabla de posiciones                  |
+| POST   | `/projections/rebuild` | Recalcula la tabla desde los eventos |
 
-Body para crear un partido:
-
-```json
-{
-  "team_a_id": 1,
-  "team_b_id": 2,
-  "score_a": 3,
-  "score_b": 1
-}
-```
+Todo `POST`/`DELETE` acepta la cabecera `Idempotency-Key`: si la misma key
+llega dos veces, la segunda devuelve la respuesta original sin volver a
+ejecutarse. El detalle de cada endpoint está en
+[docs/tecnica.md](docs/tecnica.md#api).
 
 ### Ejemplos con curl
 
@@ -377,8 +392,12 @@ curl localhost:8080/teams
 curl -X POST localhost:8080/players -d '{"name":"Lionel Messi","team_id":1}'
 curl localhost:8080/players
 
-curl -X POST localhost:8080/matches -d '{"team_a_id":1,"team_b_id":2,"score_a":3,"score_b":3}'
+curl -X POST localhost:8080/matches -H 'Idempotency-Key: partido-1' -d '{"team_a_id":1,"team_b_id":2}'
+curl -X POST localhost:8080/matches/1/events -d '{"type":"clock_advanced","advance_sec":1800}'
+curl -X POST localhost:8080/matches/1/events -d '{"type":"goal","player_id":1,"expected_version":2}'
+curl -X POST localhost:8080/matches/1/events -d '{"type":"match_finished"}'
 curl localhost:8080/matches
+curl localhost:8080/standings
 ```
 
 ## Desplegar en la nube (Render)
@@ -511,9 +530,13 @@ hecho en el CD se reusó tal cual.
 .
 ├── main.go                   # CLI: parseo de subcomandos y arranque del servidor
 ├── internal/
-│   ├── model/                # Structs de dominio: Player, Team, Match
+│   ├── model/                # Dominio: Player, Team y eventos de partido (match.go)
 │   ├── store/                # Persistencia en Redis
-│   ├── api/                  # Handlers HTTP de la API REST
+│   │   ├── store.go          # Jugadores y equipos (CRUD)
+│   │   ├── matches.go        # Partidos, lado de escritura (eventos)
+│   │   ├── projection.go     # Proyector y lado de lectura (tabla, marcadores)
+│   │   └── idempotency.go    # Registro de idempotency keys
+│   ├── api/                  # Handlers HTTP + middleware de idempotencia
 │   └── web/                  # Interfaz web embebida en el binario
 │       ├── web.go            # go:embed de assets/ y montaje sobre el mux
 │       └── assets/
@@ -524,6 +547,10 @@ hecho en el CD se reusó tal cual.
 ├── docker-compose.yml        # LOCAL: compila la imagen (build: .)
 ├── docker-compose.cloud.yml  # NUBE: baja la imagen del registry (image: ghcr.io/...)
 ├── nginx.conf                # Config del balanceador de carga (round robin)
+├── docs/
+│   ├── teoria.md             # CQRS, Event Sourcing, idempotencia: conceptos y decisiones
+│   ├── tecnica.md            # Implementación, endpoints, claves de Redis
+│   └── demo.md               # Guion de la presentación
 ├── .github/workflows/
 │   ├── ci.yml                # Tests (go vet + go test -race)
 │   ├── sast.yml              # Análisis de seguridad (gosec)
@@ -535,5 +562,8 @@ hecho en el CD se reusó tal cual.
 
 - `gepa:seq:player` / `gepa:seq:team` / `gepa:seq:match`: contadores
   (`INCR`) usados para generar IDs autoincrementales.
-- `gepa:players` / `gepa:teams` / `gepa:matches`: hashes de Redis donde cada
-  campo es el ID de la entidad y el valor es el registro en JSON.
+- `gepa:players` / `gepa:teams`: hashes de Redis donde cada campo es el ID
+  de la entidad y el valor es el registro en JSON.
+- Partidos: streams de eventos (`gepa:match:{id}:events`), modelos de lectura
+  (`gepa:read:*`) e idempotency keys (`gepa:idem:*`). Ver
+  [docs/tecnica.md](docs/tecnica.md#claves-de-redis).

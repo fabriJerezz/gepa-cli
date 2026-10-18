@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"time"
 
 	"gepa-cli/internal/api"
+	"gepa-cli/internal/model"
 	"gepa-cli/internal/store"
 )
 
@@ -60,6 +62,15 @@ func run(ctx context.Context, args []string) error {
 		return runTeam(ctx, s, args[1:])
 	case "match":
 		return runMatch(ctx, s, args[1:])
+	case "standings":
+		return runStandings(ctx, s)
+	case "rebuild":
+		n, err := s.Rebuild(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("modelos de lectura reconstruidos desde los eventos de %d partidos\n", n)
+		return nil
 	case "serve":
 		return runServe(s, args[1:])
 	default:
@@ -175,8 +186,14 @@ func runTeam(ctx context.Context, s *store.Store, args []string) error {
 	return nil
 }
 
-// runMatch maneja los subcomandos "match add", "match list" y "match del". Los equipos se
-// referencian por ID (los mismos que muestra "team list").
+// runMatch maneja los subcomandos de partidos. Los equipos se referencian
+// por ID (los mismos que muestra "team list").
+//
+// "match add" carga un partido ya jugado: por dentro genera los mismos
+// eventos que la interfaz en vivo (inicio, un gol por cada tanto, cierre).
+// Después de escribir, la CLI proyecta el partido ella misma porque no tiene
+// un proyector corriendo; como la proyección es idempotente, que un
+// servidor lo proyecte de nuevo no cambia nada.
 func runMatch(ctx context.Context, s *store.Store, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("uso: gepa match <add|list|del> ...")
@@ -184,36 +201,43 @@ func runMatch(ctx context.Context, s *store.Store, args []string) error {
 	switch args[0] {
 	case "add":
 		if len(args) < 5 {
-			return fmt.Errorf("uso: gepa match add <equipoA_id> <equipoB_id> <marcadorA> <marcadorB>")
+			return fmt.Errorf("uso: gepa match add <equipoA_id> <equipoB_id> <golesA> <golesB>")
 		}
-		teamAID, err := strconv.Atoi(args[1])
-		if err != nil {
-			return fmt.Errorf("equipoA_id inválido: %w", err)
+		nums := make([]int, 4)
+		for i, name := range []string{"equipoA_id", "equipoB_id", "golesA", "golesB"} {
+			n, err := strconv.Atoi(args[i+1])
+			if err != nil {
+				return fmt.Errorf("%s inválido: %w", name, err)
+			}
+			nums[i] = n
 		}
-		teamBID, err := strconv.Atoi(args[2])
-		if err != nil {
-			return fmt.Errorf("equipoB_id inválido: %w", err)
+		if nums[2] < 0 || nums[3] < 0 {
+			return fmt.Errorf("el resultado no puede ser negativo")
 		}
-		scoreA, err := strconv.Atoi(args[3])
-		if err != nil {
-			return fmt.Errorf("marcadorA inválido: %w", err)
-		}
-		scoreB, err := strconv.Atoi(args[4])
-		if err != nil {
-			return fmt.Errorf("marcadorB inválido: %w", err)
-		}
-		m, err := s.AddMatch(ctx, teamAID, teamBID, scoreA, scoreB)
+		m, err := s.StartMatch(ctx, nums[0], nums[1])
 		if err != nil {
 			return err
 		}
-		fmt.Printf("partido creado: #%d equipo %d %d - %d equipo %d\n", m.ID, m.TeamAID, m.ScoreA, m.ScoreB, m.TeamBID)
+		goals := append(slices.Repeat([]int{m.TeamAID}, nums[2]), slices.Repeat([]int{m.TeamBID}, nums[3])...)
+		for _, team := range goals {
+			if _, err := s.AppendEvent(ctx, m.ID, -1, model.Event{Type: model.EventGoal, TeamID: team}, nil); err != nil {
+				return err
+			}
+		}
+		if _, err := s.AppendEvent(ctx, m.ID, -1, model.Event{Type: model.EventMatchFinished}, nil); err != nil {
+			return err
+		}
+		if err := s.ProjectMatch(ctx, m.ID); err != nil {
+			return err
+		}
+		fmt.Printf("partido cargado: #%d equipo %d %d - %d equipo %d\n", m.ID, m.TeamAID, nums[2], nums[3], m.TeamBID)
 	case "list":
 		matches, err := s.ListMatches(ctx)
 		if err != nil {
 			return err
 		}
 		for _, m := range matches {
-			fmt.Printf("#%d equipo %d %d - %d equipo %d\n", m.ID, m.TeamAID, m.ScoreA, m.ScoreB, m.TeamBID)
+			fmt.Printf("#%d equipo %d %d - %d equipo %d (%s, v%d)\n", m.ID, m.TeamAID, m.ScoreA, m.ScoreB, m.TeamBID, m.Status, m.Version)
 		}
 	case "del":
 		if len(args) < 2 {
@@ -223,12 +247,28 @@ func runMatch(ctx context.Context, s *store.Store, args []string) error {
 		if err != nil {
 			return fmt.Errorf("partido_id inválido: %w", err)
 		}
-		if err := s.DeleteMatch(ctx, id); err != nil {
+		if err := s.CancelMatch(ctx, id); err != nil {
 			return err
 		}
-		fmt.Printf("partido eliminado: #%d\n", id)
+		if err := s.ProjectMatch(ctx, id); err != nil {
+			return err
+		}
+		fmt.Printf("partido cancelado: #%d\n", id)
 	default:
 		return fmt.Errorf("subcomando desconocido: match %s", args[0])
+	}
+	return nil
+}
+
+// runStandings imprime la tabla de posiciones (modelo de lectura).
+func runStandings(ctx context.Context, s *store.Store) error {
+	rows, err := s.Standings(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%-3s %-20s %3s %3s %3s %3s %3s %3s %4s %4s\n", "#", "Equipo", "PJ", "G", "E", "P", "GF", "GC", "DG", "Pts")
+	for i, r := range rows {
+		fmt.Printf("%-3d %-20s %3d %3d %3d %3d %3d %3d %4d %4d\n", i+1, r.TeamName, r.Played, r.Won, r.Drawn, r.Lost, r.GoalsFor, r.GoalsAgainst, r.GoalDiff, r.Points)
 	}
 	return nil
 }
@@ -243,6 +283,11 @@ func runServe(s *store.Store, args []string) error {
 	}
 	handler := api.NewServer(s, instanceName())
 	fmt.Printf("escuchando en %s (instancia %q)\n", addr, instanceName())
+
+	// El proyector corre dentro de cada réplica, en segundo plano. Las 3
+	// comparten un consumer group de Redis, así que cada evento lo proyecta
+	// una sola (ver store.RunProjector).
+	go s.RunProjector(context.Background(), instanceName())
 
 	// No usamos http.ListenAndServe directo porque no permite configurar
 	// timeouts: un cliente lento (o malicioso) podría dejar conexiones
@@ -283,9 +328,11 @@ Uso:
   gepa [--redis-addr <host:puerto>] team add <nombre>
   gepa [--redis-addr <host:puerto>] team list
   gepa [--redis-addr <host:puerto>] team del <id>
-  gepa [--redis-addr <host:puerto>] match add <equipoA_id> <equipoB_id> <marcadorA> <marcadorB>
+  gepa [--redis-addr <host:puerto>] match add <equipoA_id> <equipoB_id> <golesA> <golesB>
   gepa [--redis-addr <host:puerto>] match list
-  gepa [--redis-addr <host:puerto>] match del <id>
+  gepa [--redis-addr <host:puerto>] match del <id>        (cancela el partido)
+  gepa [--redis-addr <host:puerto>] standings             (tabla de posiciones)
+  gepa [--redis-addr <host:puerto>] rebuild               (rearma la tabla desde los eventos)
   gepa [--redis-addr <host:puerto>] serve [addr]   (por defecto :8080)
 
 Redis por defecto: localhost:6379 (override con --redis-addr o REDIS_ADDR).`)

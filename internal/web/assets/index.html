@@ -3,173 +3,138 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#070b09">
+    <meta name="theme-color" content="#141c18">
     <title>FutGo — Estadio de fútbol</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=JetBrains+Mono:wght@500;600&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/assets/app.css">
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
-    <div class="app-shell">
-      <header class="jumbotron top-stand" aria-labelledby="page-title">
-        <div class="jumbotron-brand">
-          <p class="eyebrow">Estadio FutGo · Fecha abierta</p>
-          <h1 id="page-title">FutGo</h1>
-          <p class="subtitle">La cancha donde viven los planteles y los partidos.</p>
-        </div>
-        <div class="instance-pill" aria-live="polite">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#en-vivo" aria-label="FutGo, ir a partidos en vivo">
+          <span class="brand-mark">FutGo</span>
+          <span class="brand-tag">Estadio · Fecha abierta</span>
+        </a>
+        <nav class="topnav" aria-label="Secciones">
+          <a href="#en-vivo">En vivo</a>
+          <a href="#tabla">Tabla</a>
+          <a href="#planteles">Planteles</a>
+          <a href="#registro">Registro</a>
+        </nav>
+        <div class="instance-pill" aria-live="polite" title="Réplica que atendió la última request (cabecera X-Instance)">
           <span class="status-dot" aria-hidden="true"></span>
-          <span class="instance-label">VAR · cámara</span>
-          <strong id="instance-value">Conectando…</strong>
+          <span class="instance-label">Atiende</span>
+          <strong id="instance-value">…</strong>
         </div>
-      </header>
+      </div>
+    </header>
 
-      <div id="error-banner" class="error-banner" role="alert" hidden></div>
-
-      <main>
-        <section class="stadium-shell" aria-label="Estadio FutGo">
-          <div class="stand stand-north" aria-label="Tribuna norte">
-            <div class="stand-seats" aria-hidden="true"></div>
-            <div class="stand-fascia"><span>TRIBUNA NORTE</span></div>
-          </div>
-          <div class="stand stand-west" aria-label="Tribuna oeste">
-            <div class="stand-seats" aria-hidden="true"></div>
-            <div class="stand-fascia"><span>OESTE</span></div>
-          </div>
-
-          <div class="stadium-core">
-            <section class="jumbotron match-board" aria-labelledby="matches-title">
-              <div class="board-heading">
-                <div>
-                  <p class="eyebrow">Marcador electrónico</p>
-                  <h2 id="matches-title">Partidos en vivo</h2>
-                </div>
-                <span class="board-light" aria-hidden="true">● EN VIVO</span>
+    <div class="app-shell">
+      <main class="layout">
+        <div class="main-column">
+          <section id="en-vivo" class="section" aria-labelledby="live-title">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Marcador electrónico</p>
+                <h1 id="live-title" class="section-title">En vivo <span id="live-count" class="count-chip">0</span></h1>
               </div>
-              <div id="matches-list" class="matches-list" aria-live="polite"></div>
-            </section>
-
-            <section class="pitch-area" aria-labelledby="pitch-title">
-              <div class="pitch-label">
-                <span class="eyebrow">El campo</span>
-                <h2 id="pitch-title">CANCHA</h2>
-              </div>
-              <div class="pitch-frame">
-                <div class="pitch" aria-label="Cancha de fútbol con los planteles">
-                  <div class="pitch-lines" aria-hidden="true">
-                    <span class="halfway-line"></span>
-                    <span class="center-circle"></span>
-                    <span class="center-spot"></span>
-                    <span class="penalty-area penalty-area-top"></span>
-                    <span class="penalty-area penalty-area-bottom"></span>
-                    <span class="goal-area goal-area-top"></span>
-                    <span class="goal-area goal-area-bottom"></span>
-                    <span class="penalty-spot penalty-spot-top"></span>
-                    <span class="penalty-spot penalty-spot-bottom"></span>
-                  </div>
-                  <div id="squads-list" class="squads" aria-live="polite"></div>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <div class="stand stand-east" aria-label="Tribuna este">
-            <div class="stand-seats" aria-hidden="true"></div>
-            <div class="stand-fascia"><span>ESTE</span></div>
-          </div>
-          <div class="stand stand-south" aria-label="Tribuna sur">
-            <div class="stand-seats" aria-hidden="true"></div>
-            <div class="stand-fascia"><span>TRIBUNA SUR · FUTGO</span></div>
-          </div>
-        </section>
-
-        <section class="control-deck" aria-labelledby="controls-title">
-          <div class="section-heading">
-            <p class="eyebrow">Mesa de operaciones</p>
-            <h2 id="controls-title">Vestuario y fixture</h2>
-          </div>
-          <div class="forms-grid">
-            <section class="form-panel" aria-labelledby="team-form-title">
-              <div class="form-panel-heading">
-                <span class="form-number">01</span>
-                <div>
-                  <p class="eyebrow">Nuevo vestuario</p>
-                  <h3 id="team-form-title">Sumar equipo</h3>
-                </div>
-              </div>
-              <form id="team-form">
-                <label for="team-name">Nombre del equipo</label>
-                <div class="input-action">
-                  <input id="team-name" name="name" type="text" autocomplete="off" placeholder="Ej. Las Estrellas" required>
-                  <button type="submit">Crear equipo</button>
-                </div>
+              <form id="match-form" class="kickoff" aria-label="Iniciar partido">
+                <label class="sr-only" for="team-a">Equipo local</label>
+                <select id="team-a" name="team_a_id" required></select>
+                <span class="kickoff-vs" aria-hidden="true">vs</span>
+                <label class="sr-only" for="team-b">Equipo visitante</label>
+                <select id="team-b" name="team_b_id" required></select>
+                <button id="match-submit" type="submit" class="btn btn-primary" disabled>Iniciar partido</button>
               </form>
-            </section>
+            </div>
+            <p class="section-hint">Cada gol, tarjeta o anulación es un evento. El marcador y la tabla se calculan a partir de ellos.</p>
+            <div id="live-list" class="live-list" aria-live="polite"></div>
+          </section>
 
-            <section class="form-panel" aria-labelledby="player-form-title">
-              <div class="form-panel-heading">
-                <span class="form-number">02</span>
-                <div>
-                  <p class="eyebrow">Alta de plantel</p>
-                  <h3 id="player-form-title">Sumar jugador</h3>
-                </div>
+          <section id="resultados" class="section" aria-labelledby="results-title">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Partidos finalizados</p>
+                <h2 id="results-title" class="section-title section-title-sm">Resultados <span id="results-count" class="count-chip">0</span></h2>
               </div>
-              <form id="player-form">
-                <div class="form-fields">
-                  <div>
-                    <label for="player-name">Nombre del jugador</label>
-                    <input id="player-name" name="name" type="text" autocomplete="off" placeholder="Ej. Lionel Messi" required>
-                  </div>
-                  <div>
-                    <label for="player-team">Equipo</label>
-                    <select id="player-team" name="team_id" required></select>
-                  </div>
-                </div>
-                <button id="player-submit" type="submit" disabled>Incorporar al plantel</button>
-              </form>
-            </section>
+            </div>
+            <div id="results-list" class="results-list"></div>
+          </section>
 
-            <section class="form-panel match-form-panel" aria-labelledby="match-form-title">
-              <div class="form-panel-heading">
-                <span class="form-number">03</span>
-                <div>
-                  <p class="eyebrow">Nueva fecha</p>
-                  <h3 id="match-form-title">Registrar partido</h3>
-                </div>
+          <section id="planteles" class="section pitch-section" aria-labelledby="squads-title">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Vestuario</p>
+                <h2 id="squads-title" class="section-title section-title-sm">Planteles <span id="teams-count" class="count-chip">0</span></h2>
               </div>
-              <form id="match-form">
-                <div class="form-fields match-fields">
-                  <div>
-                    <label for="team-a">Equipo local</label>
-                    <select id="team-a" name="team_a_id" required></select>
-                  </div>
-                  <div>
-                    <label for="team-b">Equipo visitante</label>
-                    <select id="team-b" name="team_b_id" required></select>
-                  </div>
-                  <div>
-                    <label for="score-a">Goles local</label>
-                    <input id="score-a" name="score_a" type="number" min="0" value="0" required>
-                  </div>
-                  <div>
-                    <label for="score-b">Goles visitante</label>
-                    <input id="score-b" name="score_b" type="number" min="0" value="0" required>
-                  </div>
-                </div>
-                <button id="match-submit" type="submit" disabled>Mandar al marcador</button>
-              </form>
-            </section>
-          </div>
-        </section>
+            </div>
+            <div class="pitch">
+              <div id="squads-list" class="squads" aria-live="polite"></div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="side-column" aria-label="Tabla y registro">
+          <section id="tabla" class="panel" aria-labelledby="standings-title">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Modelo de lectura · GET /standings</p>
+                <h2 id="standings-title" class="panel-title">Tabla de posiciones</h2>
+              </div>
+              <button id="rebuild-button" type="button" class="btn btn-ghost btn-sm" title="Borra la tabla y la recalcula leyendo todos los eventos">Reconstruir</button>
+            </div>
+            <div class="table-scroll">
+              <table class="standings-table">
+                <thead>
+                  <tr>
+                    <th scope="col" class="pos-col"><span class="sr-only">Posición</span>#</th>
+                    <th scope="col" class="team-col">Equipo</th>
+                    <th scope="col"><abbr title="Partidos jugados">PJ</abbr></th>
+                    <th scope="col"><abbr title="Ganados">G</abbr></th>
+                    <th scope="col"><abbr title="Empatados">E</abbr></th>
+                    <th scope="col"><abbr title="Perdidos">P</abbr></th>
+                    <th scope="col" class="hide-narrow"><abbr title="Goles a favor">GF</abbr></th>
+                    <th scope="col" class="hide-narrow"><abbr title="Goles en contra">GC</abbr></th>
+                    <th scope="col"><abbr title="Diferencia de gol">DG</abbr></th>
+                    <th scope="col" class="points-col"><abbr title="Puntos">Pts</abbr></th>
+                  </tr>
+                </thead>
+                <tbody id="standings-body"></tbody>
+              </table>
+            </div>
+            <p class="panel-note">Solo suman los partidos finalizados. 3 puntos por victoria, 1 por empate.</p>
+          </section>
+
+          <section id="registro" class="panel" aria-labelledby="log-title">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Qué réplica atendió cada comando</p>
+                <h2 id="log-title" class="panel-title">Registro de requests</h2>
+              </div>
+            </div>
+            <label class="toggle">
+              <input id="double-send" type="checkbox">
+              <span class="toggle-track" aria-hidden="true"></span>
+              <span class="toggle-text">Simular reintento <small>Manda cada comando dos veces con la misma <code>Idempotency-Key</code></small></span>
+            </label>
+            <ol id="request-log" class="request-log" aria-live="polite"></ol>
+          </section>
+        </aside>
+
       </main>
 
       <footer class="site-footer">
-        <span>Tribunas llenas</span>
-        <span aria-hidden="true">·</span>
-        <span>Datos en vivo desde Redis</span>
+        <span>FutGo · Nginx + 3 réplicas + Redis</span>
+        <span>CQRS · Event Sourcing · Idempotencia</span>
       </footer>
+    </div>
+
+    <div id="error-banner" class="toast" role="alert" hidden>
+      <p id="error-text"></p>
+      <button id="error-close" type="button" class="toast-close" aria-label="Cerrar aviso">✕</button>
     </div>
   </body>
 </html>

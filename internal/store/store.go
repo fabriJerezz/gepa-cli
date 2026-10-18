@@ -6,11 +6,15 @@
 //   - "gepa:seq:player" / "gepa:seq:team" / "gepa:seq:match"
 //     Contadores atómicos (INCR) usados para generar IDs autoincrementales.
 //
-//   - "gepa:players" / "gepa:teams" / "gepa:matches"
+//   - "gepa:players" / "gepa:teams"
 //     Hashes de Redis donde cada campo es el ID de la entidad (como string)
 //     y el valor es el registro serializado en JSON. Usar un hash nos da
 //     inserción, lectura por ID y listado completo (HGETALL) en O(1)/O(n)
 //     sin tener que mantener índices adicionales.
+//
+// Los partidos no siguen este esquema CRUD: usan eventos (matches.go, lado
+// de escritura) y modelos de lectura armados por un proyector
+// (projection.go). Ver docs/tecnica.md.
 package store
 
 import (
@@ -39,11 +43,9 @@ var ErrConflict = errors.New("no se puede eliminar")
 const (
 	keyPlayers = "gepa:players"
 	keyTeams   = "gepa:teams"
-	keyMatches = "gepa:matches"
 
 	seqPlayer = "gepa:seq:player"
 	seqTeam   = "gepa:seq:team"
-	seqMatch  = "gepa:seq:match"
 )
 
 // Store administra el acceso a Redis para todas las entidades del dominio.
@@ -167,6 +169,23 @@ func (s *Store) ListTeams(ctx context.Context) ([]model.Team, error) {
 	return out, nil
 }
 
+// getPlayer busca un jugador por ID. Devuelve ErrNotFound si no existe.
+func (s *Store) getPlayer(ctx context.Context, id int) (model.Player, error) {
+	raw, err := s.rdb.HGet(ctx, keyPlayers, strconv.Itoa(id)).Result()
+	if errors.Is(err, redis.Nil) {
+		return model.Player{}, fmt.Errorf("jugador %d: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return model.Player{}, fmt.Errorf("buscando jugador %d: %w", id, err)
+	}
+
+	var p model.Player
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return model.Player{}, fmt.Errorf("decodificando jugador: %w", err)
+	}
+	return p, nil
+}
+
 // GetTeam busca un equipo por ID. Devuelve ErrNotFound si no existe.
 func (s *Store) GetTeam(ctx context.Context, id int) (model.Team, error) {
 	raw, err := s.rdb.HGet(ctx, keyTeams, strconv.Itoa(id)).Result()
@@ -203,14 +222,14 @@ func (s *Store) DeleteTeam(ctx context.Context, id int) error {
 		}
 	}
 
-	matches, err := s.ListMatches(ctx)
+	// Se consulta el lado de escritura (los eventos) y no el modelo de
+	// lectura: un partido recién creado puede no estar proyectado todavía.
+	inMatch, err := s.teamHasMatches(ctx, id)
 	if err != nil {
 		return err
 	}
-	for _, match := range matches {
-		if match.TeamAID == id || match.TeamBID == id {
-			return fmt.Errorf("el equipo tiene partidos: %w", ErrConflict)
-		}
+	if inMatch {
+		return fmt.Errorf("el equipo tiene partidos: %w", ErrConflict)
 	}
 
 	deleted, err := s.rdb.HDel(ctx, keyTeams, strconv.Itoa(id)).Result()
@@ -231,82 +250,6 @@ func (s *Store) teamExists(ctx context.Context, id int) (bool, error) {
 		return false, fmt.Errorf("verificando equipo %d: %w", id, err)
 	}
 	return n, nil
-}
-
-// AddMatch registra un partido entre dos equipos existentes con su
-// resultado. Valida que ambos equipos existan y que el resultado tenga
-// sentido antes de persistir.
-func (s *Store) AddMatch(ctx context.Context, teamAID, teamBID, scoreA, scoreB int) (model.Match, error) {
-	if teamAID == teamBID {
-		return model.Match{}, errors.New("un equipo no puede jugar contra sí mismo")
-	}
-	if scoreA < 0 || scoreB < 0 {
-		return model.Match{}, errors.New("el resultado no puede ser negativo")
-	}
-
-	okA, err := s.teamExists(ctx, teamAID)
-	if err != nil {
-		return model.Match{}, err
-	}
-	if !okA {
-		return model.Match{}, fmt.Errorf("equipo %d: %w", teamAID, ErrNotFound)
-	}
-
-	okB, err := s.teamExists(ctx, teamBID)
-	if err != nil {
-		return model.Match{}, err
-	}
-	if !okB {
-		return model.Match{}, fmt.Errorf("equipo %d: %w", teamBID, ErrNotFound)
-	}
-
-	id, err := s.rdb.Incr(ctx, seqMatch).Result()
-	if err != nil {
-		return model.Match{}, fmt.Errorf("generando id: %w", err)
-	}
-
-	m := model.Match{
-		ID:      int(id),
-		TeamAID: teamAID,
-		TeamBID: teamBID,
-		ScoreA:  scoreA,
-		ScoreB:  scoreB,
-	}
-	if err := s.hsetJSON(ctx, keyMatches, m.ID, m); err != nil {
-		return model.Match{}, err
-	}
-	return m, nil
-}
-
-// ListMatches devuelve todos los partidos, ordenados por ID.
-func (s *Store) ListMatches(ctx context.Context) ([]model.Match, error) {
-	raw, err := s.rdb.HGetAll(ctx, keyMatches).Result()
-	if err != nil {
-		return nil, fmt.Errorf("listando partidos: %w", err)
-	}
-
-	out := make([]model.Match, 0, len(raw))
-	for _, v := range raw {
-		var m model.Match
-		if err := json.Unmarshal([]byte(v), &m); err != nil {
-			return nil, fmt.Errorf("decodificando partido: %w", err)
-		}
-		out = append(out, m)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
-}
-
-// DeleteMatch elimina un partido por ID.
-func (s *Store) DeleteMatch(ctx context.Context, id int) error {
-	deleted, err := s.rdb.HDel(ctx, keyMatches, strconv.Itoa(id)).Result()
-	if err != nil {
-		return fmt.Errorf("eliminando partido %d: %w", id, err)
-	}
-	if deleted == 0 {
-		return fmt.Errorf("partido %d: %w", id, ErrNotFound)
-	}
-	return nil
 }
 
 // hsetJSON serializa v como JSON y lo guarda en el campo `id` del hash

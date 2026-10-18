@@ -1,6 +1,7 @@
 // Package model define las entidades de dominio de la aplicación: jugadores,
-// equipos y partidos. Son simples structs de datos, sin lógica de negocio ni
-// dependencias de almacenamiento (eso vive en internal/store).
+// equipos y partidos. No tiene dependencias de almacenamiento (eso vive en
+// internal/store); la única lógica es la de los eventos de partido, que es
+// pura y por eso vive acá.
 package model
 
 // Player representa un jugador con nombre y pertenencia a un equipo.
@@ -16,12 +17,5 @@ type Team struct {
 	Name string `json:"name"`
 }
 
-// Match representa un partido jugado entre dos equipos (TeamAID vs TeamBID)
-// y el resultado final (ScoreA vs ScoreB).
-type Match struct {
-	ID      int `json:"id"`
-	TeamAID int `json:"team_a_id"`
-	TeamBID int `json:"team_b_id"`
-	ScoreA  int `json:"score_a"`
-	ScoreB  int `json:"score_b"`
-}
+// Los partidos viven en match.go: a diferencia de jugadores y equipos (CRUD
+// simple), se modelan como una secuencia de eventos.

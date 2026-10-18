@@ -223,98 +223,20 @@ func TestDeleteTeamConPartido(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddTeam: %v", err)
 	}
-	if _, err := s.AddMatch(ctx, teamA.ID, teamB.ID, 3, 3); err != nil {
-		t.Fatalf("AddMatch: %v", err)
+	m, err := s.StartMatch(ctx, teamA.ID, teamB.ID)
+	if err != nil {
+		t.Fatalf("StartMatch: %v", err)
 	}
 
 	if err := s.DeleteTeam(ctx, teamA.ID); !errors.Is(err, ErrConflict) || err.Error() != "el equipo tiene partidos: no se puede eliminar" {
 		t.Fatalf("esperaba conflicto por partidos, obtuve %v", err)
 	}
-	if _, err := s.GetTeam(ctx, teamA.ID); err != nil {
-		t.Fatalf("el equipo no debería haberse eliminado: %v", err)
+
+	// Un partido cancelado ya no bloquea el borrado.
+	if err := s.CancelMatch(ctx, m.ID); err != nil {
+		t.Fatalf("CancelMatch: %v", err)
 	}
-}
-
-func TestAddMatch(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	teamA, _ := s.AddTeam(ctx, "Argentina")
-	teamB, _ := s.AddTeam(ctx, "Francia")
-
-	m, err := s.AddMatch(ctx, teamA.ID, teamB.ID, 3, 3)
-	if err != nil {
-		t.Fatalf("AddMatch: %v", err)
-	}
-	if m.TeamAID != teamA.ID || m.TeamBID != teamB.ID || m.ScoreA != 3 || m.ScoreB != 3 {
-		t.Errorf("partido inesperado: %+v", m)
-	}
-
-	matches, err := s.ListMatches(ctx)
-	if err != nil {
-		t.Fatalf("ListMatches: %v", err)
-	}
-	if len(matches) != 1 {
-		t.Fatalf("esperaba 1 partido, obtuve %d", len(matches))
-	}
-}
-
-func TestAddMatchEquipoInexistente(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	teamA, _ := s.AddTeam(ctx, "Argentina")
-
-	_, err := s.AddMatch(ctx, teamA.ID, 999, 1, 0)
-	if !errors.Is(err, ErrNotFound) {
-		t.Errorf("esperaba ErrNotFound, obtuve %v", err)
-	}
-}
-
-func TestDeleteMatch(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	teamA, _ := s.AddTeam(ctx, "Argentina")
-	teamB, _ := s.AddTeam(ctx, "Francia")
-	match, err := s.AddMatch(ctx, teamA.ID, teamB.ID, 3, 3)
-	if err != nil {
-		t.Fatalf("AddMatch: %v", err)
-	}
-
-	if err := s.DeleteMatch(ctx, match.ID); err != nil {
-		t.Fatalf("DeleteMatch: %v", err)
-	}
-	matches, err := s.ListMatches(ctx)
-	if err != nil {
-		t.Fatalf("ListMatches: %v", err)
-	}
-	if len(matches) != 0 {
-		t.Fatalf("esperaba lista vacía, obtuve %d partidos", len(matches))
-	}
-	if err := s.DeleteMatch(ctx, match.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("esperaba ErrNotFound al borrar partido inexistente, obtuve %v", err)
-	}
-}
-
-func TestAddMatchMismoEquipo(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	teamA, _ := s.AddTeam(ctx, "Argentina")
-
-	if _, err := s.AddMatch(ctx, teamA.ID, teamA.ID, 1, 0); err == nil {
-		t.Fatal("esperaba error por equipo jugando contra sí mismo")
-	}
-}
-
-func TestAddMatchResultadoNegativo(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-
-	teamA, _ := s.AddTeam(ctx, "Argentina")
-	teamB, _ := s.AddTeam(ctx, "Francia")
-
-	if _, err := s.AddMatch(ctx, teamA.ID, teamB.ID, -1, 0); err == nil {
-		t.Fatal("esperaba error por resultado negativo")
+	if err := s.DeleteTeam(ctx, teamA.ID); err != nil {
+		t.Fatalf("DeleteTeam con partido cancelado: %v", err)
 	}
 }

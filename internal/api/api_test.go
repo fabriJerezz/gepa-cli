@@ -19,6 +19,15 @@ import (
 // Redis real. instanceName simula el valor que en Docker viene de la
 // variable de entorno INSTANCE_NAME.
 func newTestServer(t *testing.T, instanceName string) http.Handler {
+	h, _ := newTestEnv(t, instanceName)
+	return h
+}
+
+// newTestEnv es como newTestServer pero también devuelve el store, para
+// los tests que necesitan proyectar (en producción lo hace el proyector en
+// segundo plano; en los tests se fuerza con Rebuild para que sea
+// determinístico).
+func newTestEnv(t *testing.T, instanceName string) (http.Handler, *store.Store) {
 	t.Helper()
 
 	mr := miniredis.RunT(t)
@@ -28,7 +37,7 @@ func newTestServer(t *testing.T, instanceName string) http.Handler {
 	}
 	t.Cleanup(func() { s.Close() })
 
-	return NewServer(s, instanceName)
+	return NewServer(s, instanceName), s
 }
 
 func doRequest(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -176,41 +185,147 @@ func TestCreatePlayerEquipoInexistenteDevuelve404(t *testing.T) {
 func TestCreateMatchEquipoInexistenteDevuelve404(t *testing.T) {
 	h := newTestServer(t, "app1")
 
-	rec := doRequest(t, h, http.MethodPost, "/matches", map[string]int{
-		"team_a_id": 1,
-		"team_b_id": 2,
-		"score_a":   1,
-		"score_b":   0,
-	})
+	rec := doRequest(t, h, http.MethodPost, "/matches", map[string]int{"team_a_id": 1, "team_b_id": 2})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, esperaba %d (equipos inexistentes)", rec.Code, http.StatusNotFound)
 	}
 }
 
-func TestCreateMatchFlujoCompleto(t *testing.T) {
-	h := newTestServer(t, "app1")
-
+func TestPartidoEnVivoFlujoCompleto(t *testing.T) {
+	h, s := newTestEnv(t, "app1")
 	teamA := createTeam(t, h, "Argentina")
 	teamB := createTeam(t, h, "Francia")
 
-	rec := doRequest(t, h, http.MethodPost, "/matches", map[string]int{
-		"team_a_id": teamA,
-		"team_b_id": teamB,
-		"score_a":   3,
-		"score_b":   3,
-	})
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	rec := doRequest(t, h, http.MethodPost, "/matches", map[string]int{"team_a_id": teamA, "team_b_id": teamB})
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"version":1`) {
+		t.Fatalf("iniciando partido: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	for _, ev := range []map[string]any{
+		{"type": "goal", "team_id": teamA, "minute": 12, "expected_version": 1},
+		{"type": "yellow_card", "team_id": teamB, "minute": 40, "expected_version": 2},
+		{"type": "match_finished", "expected_version": 3},
+	} {
+		rec = doRequest(t, h, http.MethodPost, "/matches/1/events", ev)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("evento %v: status = %d, body = %s", ev["type"], rec.Code, rec.Body.String())
+		}
+	}
+
+	if _, err := s.Rebuild(context.Background()); err != nil {
+		t.Fatalf("Rebuild: %v", err)
 	}
 
 	rec = doRequest(t, h, http.MethodGet, "/matches", nil)
 	var matches []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &matches); err != nil {
-		t.Fatalf("body inválido: %v", err)
+	_ = json.Unmarshal(rec.Body.Bytes(), &matches)
+	if len(matches) != 1 || matches[0]["status"] != "finished" || matches[0]["score_a"] != 1.0 || len(matches[0]["events"].([]any)) != 4 {
+		t.Fatalf("partido inesperado: %v", matches)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("esperaba 1 partido, obtuve %d", len(matches))
+
+	rec = doRequest(t, h, http.MethodGet, "/standings", nil)
+	var rows []map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &rows)
+	if len(rows) != 2 || rows[0]["team_name"] != "Argentina" || rows[0]["points"] != 3.0 {
+		t.Fatalf("tabla inesperada: %v", rows)
 	}
+}
+
+func TestEventoConVersionViejaDevuelve409(t *testing.T) {
+	h := newTestServer(t, "app1")
+	teamA := createTeam(t, h, "Argentina")
+	teamB := createTeam(t, h, "Francia")
+	doRequest(t, h, http.MethodPost, "/matches", map[string]int{"team_a_id": teamA, "team_b_id": teamB})
+
+	goal := map[string]any{"type": "goal", "team_id": teamA, "expected_version": 1}
+	if rec := doRequest(t, h, http.MethodPost, "/matches/1/events", goal); rec.Code != http.StatusCreated {
+		t.Fatalf("primer gol: status = %d", rec.Code)
+	}
+	rec := doRequest(t, h, http.MethodPost, "/matches/1/events", goal)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"current_version":2`) {
+		t.Fatalf("status = %d, body = %s; esperaba 409 con current_version", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRelojDelPartidoNoPermiteAnotarHaciaAtras(t *testing.T) {
+	h := newTestServer(t, "app1")
+	teamA := createTeam(t, h, "Argentina")
+	teamB := createTeam(t, h, "Francia")
+	doRequest(t, h, http.MethodPost, "/matches", map[string]int{"team_a_id": teamA, "team_b_id": teamB})
+
+	if rec := doRequest(t, h, http.MethodPost, "/matches/1/events", map[string]any{"type": "clock_advanced", "advance_sec": 600}); rec.Code != http.StatusCreated {
+		t.Fatalf("avanzando el reloj: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, h, http.MethodPost, "/matches/1/events", map[string]any{"type": "goal", "team_id": teamA}); rec.Code != http.StatusCreated {
+		t.Fatalf("gol en el 10': status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec := doRequest(t, h, http.MethodPost, "/matches/1/events", map[string]any{"type": "goal", "team_id": teamB, "clock_sec": 60})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "antes del último evento") {
+		t.Fatalf("gol en el 1' después de uno en el 10': status = %d, body = %s; esperaba 400", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIdempotencyKeyNoDuplicaPartidos(t *testing.T) {
+	h, s := newTestEnv(t, "app1")
+	teamA := createTeam(t, h, "Argentina")
+	teamB := createTeam(t, h, "Francia")
+	body := map[string]int{"team_a_id": teamA, "team_b_id": teamB}
+
+	first := doRequestWithKey(t, h, http.MethodPost, "/matches", body, "clave-1")
+	second := doRequestWithKey(t, h, http.MethodPost, "/matches", body, "clave-1")
+	if first.Code != http.StatusCreated || second.Code != http.StatusCreated {
+		t.Fatalf("status = %d / %d", first.Code, second.Code)
+	}
+	if second.Header().Get("Idempotent-Replayed") != "true" || second.Body.String() != first.Body.String() {
+		t.Fatalf("el reintento debería devolver la respuesta original: %q vs %q", second.Body.String(), first.Body.String())
+	}
+
+	// Una key nueva sí es un partido nuevo (dos partidos reales A vs B).
+	doRequestWithKey(t, h, http.MethodPost, "/matches", body, "clave-2")
+	_, _ = s.Rebuild(context.Background())
+	var matches []map[string]any
+	_ = json.Unmarshal(doRequest(t, h, http.MethodGet, "/matches", nil).Body.Bytes(), &matches)
+	if len(matches) != 2 {
+		t.Fatalf("esperaba 2 partidos (clave-1 una vez + clave-2), obtuve %d", len(matches))
+	}
+}
+
+func TestIdempotencyKeyConOtroBodyDevuelve422(t *testing.T) {
+	h := newTestServer(t, "app1")
+	doRequestWithKey(t, h, http.MethodPost, "/teams", map[string]string{"name": "Argentina"}, "k")
+
+	rec := doRequestWithKey(t, h, http.MethodPost, "/teams", map[string]string{"name": "Brasil"}, "k")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, esperaba 422", rec.Code)
+	}
+}
+
+func TestIdempotencyKeySeLiberaSiFalla(t *testing.T) {
+	h := newTestServer(t, "app1")
+
+	// Falla (equipos inexistentes): no hubo efectos, la key se libera...
+	body := map[string]int{"team_a_id": 1, "team_b_id": 2}
+	if rec := doRequestWithKey(t, h, http.MethodPost, "/matches", body, "k"); rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, esperaba 404", rec.Code)
+	}
+	// ...y el reintento con la misma key se procesa de verdad.
+	createTeam(t, h, "Argentina")
+	createTeam(t, h, "Francia")
+	rec := doRequestWithKey(t, h, http.MethodPost, "/matches", body, "k")
+	if rec.Code != http.StatusCreated || rec.Header().Get("Idempotent-Replayed") != "" {
+		t.Fatalf("status = %d, replayed = %q; esperaba 201 procesado de nuevo", rec.Code, rec.Header().Get("Idempotent-Replayed"))
+	}
+}
+
+func doRequestWithKey(t *testing.T, h http.Handler, method, path string, body any, key string) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, _ := json.Marshal(body)
+	req := httptest.NewRequest(method, path, bytes.NewReader(raw))
+	req.Header.Set("Idempotency-Key", key)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }
 
 func TestDeleteTeamConJugadorYLuegoSinEl(t *testing.T) {
@@ -240,24 +355,24 @@ func TestDeleteTeamConJugadorYLuegoSinEl(t *testing.T) {
 	}
 }
 
-func TestDeleteMatch(t *testing.T) {
+func TestDeleteMatchCancelaYEsIdempotente(t *testing.T) {
 	h := newTestServer(t, "app1")
 	teamA := createTeam(t, h, "Argentina")
 	teamB := createTeam(t, h, "Francia")
 
-	rec := doRequest(t, h, http.MethodPost, "/matches", map[string]int{
-		"team_a_id": teamA,
-		"team_b_id": teamB,
-		"score_a":   3,
-		"score_b":   1,
-	})
+	rec := doRequest(t, h, http.MethodPost, "/matches", map[string]int{"team_a_id": teamA, "team_b_id": teamB})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("creando partido: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	rec = doRequest(t, h, http.MethodDelete, "/matches/1", nil)
-	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
-		t.Fatalf("borrando partido: status = %d, body = %q", rec.Code, rec.Body.String())
+	for range 2 {
+		rec = doRequest(t, h, http.MethodDelete, "/matches/1", nil)
+		if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+			t.Fatalf("cancelando partido: status = %d, body = %q", rec.Code, rec.Body.String())
+		}
+	}
+	if rec = doRequest(t, h, http.MethodDelete, "/matches/99", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("partido inexistente: status = %d, esperaba 404", rec.Code)
 	}
 }
 
