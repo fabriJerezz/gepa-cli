@@ -240,10 +240,10 @@ aporta.
 
 **Qué mostrar:**
 
-1. En el **Registro de requests**, activar **Simular reintento**. Iniciar un
-   partido y registrar un gol. Cada comando sale dos veces con la misma key:
-   la segunda figura como *repetida, no se aplicó*, muchas veces atendida por
-   otra réplica. El marcador sube **uno**.
+1. En el **Registro de requests**, en **Simular reenvío**, elegir **Misma
+   key**. Iniciar un partido y registrar un gol. Cada comando sale dos veces
+   con la misma key: la segunda figura como *repetida, no se aplicó*, muchas
+   veces atendida por otra réplica. El marcador sube **uno**.
 2. La misma key contra las 3 réplicas, directo:
 
    ```bash
@@ -256,16 +256,16 @@ aporta.
 
    Solo la primera crea el partido; las otras dos responden
    `Idempotent-Replayed: true`.
-3. **Concurrencia optimista.** Sobre el partido en vivo del paso 1 (en este
-   guion, el #3), mirar su versión en la interfaz (por ejemplo `v2`) y mandar
-   dos veces el mismo pedido con esa versión:
+3. **Concurrencia optimista.** En **Simular reenvío**, elegir **Misma
+   versión** y registrar otro gol. La copia lleva **otra** key pero la misma
+   versión del partido: el registro muestra el `201` de la primera y el `409`
+   de la segunda, con la nota *la copia traía la versión N, pero el partido ya
+   iba por la N+1*. El marcador sube **uno**. Al terminar, volver a
+   **Apagado**.
 
-   ```bash
-   curl -s -X POST localhost:8080/matches/3/events -d '{"type":"yellow_card","team_id":1,"expected_version":2}'
-   curl -s -X POST localhost:8080/matches/3/events -d '{"type":"yellow_card","team_id":1,"expected_version":2}'
-   ```
-
-   El primero entra; el segundo responde `409` con la versión actual.
+   Este paso muestra por qué hacen falta las dos estrategias: con la misma
+   key el servidor reconoce **el mismo intento** y responde lo mismo; con otra
+   key es **otra acción**, y la que la frena es la versión.
 
 **Qué decir:**
 
@@ -348,8 +348,8 @@ pendiente es `DeleteTeam` en `internal/store/store.go`.
 | Proyector y consumer group | `XINFO CONSUMERS` | `store/projection.go` (`RunProjector`) | [tecnica.md](tecnica.md#proyector) |
 | Consistencia eventual | *Lectura actualizada a vN en X ms* | `app.js` (`waitForVersion`) | [teoria.md §2](teoria.md#2-cqrs-command-query-responsibility-segregation) |
 | Rebuild | Botón *Reconstruir* | `store/projection.go` (`Rebuild`) | [teoria.md §1](teoria.md#1-event-sourcing) |
-| Idempotency key | Toggle *Simular reintento*, `curl` a 3 réplicas | `api/idempotency.go`, `store/idempotency.go` | [teoria.md §3](teoria.md#3-idempotencia) |
-| Concurrencia optimista | `409` con `expected_version` | `store/matches.go` (`appendScript`) | [teoria.md §3](teoria.md#3-idempotencia) |
+| Idempotency key | *Simular reenvío → Misma key*, `curl` a 3 réplicas | `api/idempotency.go`, `store/idempotency.go` | [teoria.md §3](teoria.md#3-idempotencia) |
+| Concurrencia optimista | *Simular reenvío → Misma versión* (`409`) | `store/matches.go` (`appendScript`) | [teoria.md §3](teoria.md#3-idempotencia) |
 | Proyector idempotente | La tabla no duplica puntos | `store/projection.go` (`standingsScript`) | [teoria.md §3](teoria.md#3-idempotencia) |
 | Race condition | (explicado) | `appendScript`; pendiente en `DeleteTeam` | [teoria.md §4](teoria.md#4-race-conditions-y-check-then-act) |
 
@@ -359,7 +359,7 @@ pendiente es `DeleteTeam` en `internal/store/store.go`.
 |---|---|
 | La interfaz no carga | `docker compose ps`; si falta algo, `docker compose up -d` |
 | Un `curl` usa un número de partido que no existe o ya terminó | Mirar el número en la interfaz (*Partido #N*) y reemplazarlo |
-| El `409` no aparece | Usar la versión que muestra la interfaz en ese momento (`vN`) |
+| El `409` no aparece | Revisar que *Simular reenvío* esté en **Misma versión**: solo se aplica a eventos de un partido en vivo |
 | La tabla no se actualiza | Tocar **Reconstruir**: la recalcula desde los eventos |
 
 ## Preguntas probables

@@ -115,11 +115,15 @@
                 <h2 id="log-title" class="panel-title">Registro de requests</h2>
               </div>
             </div>
-            <label class="toggle">
-              <input id="double-send" type="checkbox">
-              <span class="toggle-track" aria-hidden="true"></span>
-              <span class="toggle-text">Simular reintento <small>Manda cada comando dos veces con la misma <code>Idempotency-Key</code></small></span>
-            </label>
+            <div class="resend">
+              <p class="resend-title" id="resend-title">Simular reenvío</p>
+              <div id="resend-modes" class="segmented resend-modes" role="radiogroup" aria-labelledby="resend-title">
+                <button type="button" role="radio" data-mode="off" class="active" aria-checked="true">Apagado</button>
+                <button type="button" role="radio" data-mode="key" aria-checked="false">Misma key</button>
+                <button type="button" role="radio" data-mode="version" aria-checked="false">Misma versión</button>
+              </div>
+              <p id="resend-hint" class="resend-hint">Cada comando se manda una vez.</p>
+            </div>
             <ol id="request-log" class="request-log" aria-live="polite"></ol>
           </section>
         </aside>

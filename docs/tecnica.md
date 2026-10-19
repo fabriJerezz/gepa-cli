@@ -179,7 +179,7 @@ Organización de la pantalla, en el orden en que se usa durante un partido:
 | **Resultados** | Partidos finalizados, ganador resaltado, planilla plegada | Historia consultable sin ocupar lugar |
 | **Planteles** (sobre el césped) | Una tarjeta por equipo, con alta de jugador en la misma tarjeta, y una tarjeta *Nuevo equipo* | Cada alta está donde se usa, sin elegir el equipo de un desplegable |
 | **Tabla** (columna lateral, fija al scrollear) | `GET /standings`, líder resaltado, DG en color y botón *Reconstruir* | Se ve cómo cambia mientras se cargan partidos |
-| **Registro** (columna lateral) | Cada comando con método, ruta, status, réplica, key y si fue repetido; toggle *Simular reintento* | Es la evidencia de idempotencia y round robin para la demo |
+| **Registro** (columna lateral) | Cada comando con método, ruta, status, réplica, key y si fue repetido; selector *Simular reenvío* | Es la evidencia de idempotencia y round robin para la demo |
 
 En pantallas angostas queda en una sola columna con este orden: en vivo,
 tabla, resultados, planteles y registro. Los errores aparecen como un aviso
@@ -187,9 +187,15 @@ flotante abajo a la derecha que se cierra solo.
 
 Comportamiento:
 
-- **Toggle "Simular reintento":** manda cada comando dos veces con la misma
-  key. La segunda aparece como "repetida, no se aplicó", muchas veces desde
-  otra réplica.
+- **Selector "Simular reenvío":** manda una segunda copia de cada comando.
+  - **Misma key:** la copia es el mismo intento. El servidor devuelve la
+    respuesta guardada y el registro la marca como "repetida, no se aplicó",
+    muchas veces desde otra réplica.
+  - **Misma versión:** la copia lleva otra key pero la misma
+    `expected_version`. El servidor la rechaza con `409`. Solo se aplica a los
+    eventos de un partido, que son los que llevan versión.
+  - En los dos casos la interfaz sigue con la respuesta de la primera copia;
+    la segunda solo queda en el registro.
 - **Reintentos automáticos:** ante un error de red o un `502/503/504`, la
   interfaz reintenta hasta 3 veces con la misma key.
 - **Consistencia eventual visible:** después de cada comando espera a que la

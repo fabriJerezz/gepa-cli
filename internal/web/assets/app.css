@@ -1644,73 +1644,42 @@ select option {
   border: 0;
 }
 
-/* Toggle de reintento */
-.toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+/* Simular reenvío */
+.resend {
+  display: grid;
+  gap: 10px;
   margin-top: 16px;
   border-radius: var(--radius-md);
   padding: 12px;
   background: var(--tunnel);
-  cursor: pointer;
 }
 
-.toggle input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.toggle-track {
-  position: relative;
-  flex-shrink: 0;
-  width: 36px;
-  height: 20px;
-  margin-top: 2px;
-  border-radius: 999px;
-  background: rgba(246, 239, 217, 0.16);
-  transition: background-color 160ms var(--ease-out);
-}
-
-.toggle-track::after {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--chalk);
-  content: "";
-  transition: transform 160ms var(--ease-out);
-}
-
-.toggle input:checked + .toggle-track {
-  background: var(--floodlight);
-}
-
-.toggle input:checked + .toggle-track::after {
-  background: #1a1204;
-  transform: translateX(16px);
-}
-
-.toggle input:focus-visible + .toggle-track {
-  outline: 2px solid var(--seam-focus);
-  outline-offset: 2px;
-}
-
-.toggle-text {
+.resend-title {
   font-size: 14px;
   font-weight: 700;
 }
 
-.toggle-text small {
-  display: block;
+.resend-modes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.resend-modes button {
+  height: 32px;
+  padding: 0 8px;
+  font-family: "Manrope", sans-serif;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.resend-hint {
   color: var(--chalk-3);
   font-size: 13px;
-  font-weight: 500;
+  text-wrap: pretty;
+}
+
+.resend-hint code {
+  font-size: 12px;
 }
 
 /* Registro */

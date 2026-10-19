@@ -10,6 +10,8 @@ const state = {
   // Gol o tarjeta esperando que se elija el jugador: guarda el minuto en que
   // se tocó el botón, así el evento queda en ese instante.
   pending: null,
+  // Modo del selector "Simular reenvío": off, key o version.
+  resendMode: "off",
   // Diferencia entre la hora del servidor y la del navegador, en ms.
   clockOffset: 0,
   // Última versión vista de cada partido y animación en curso: así se anima
@@ -39,7 +41,8 @@ const elements = {
   matchSubmit: document.querySelector("#match-submit"),
   standingsBody: document.querySelector("#standings-body"),
   rebuildButton: document.querySelector("#rebuild-button"),
-  doubleSend: document.querySelector("#double-send"),
+  resendModes: document.querySelector("#resend-modes"),
+  resendHint: document.querySelector("#resend-hint"),
   requestLog: document.querySelector("#request-log"),
 };
 
@@ -99,6 +102,14 @@ async function request(path) {
 // cada acción del usuario. Si la red falla o el proxy devuelve 502/503/504,
 // reintenta con LA MISMA key: el servidor reconoce el reintento y no lo
 // aplica dos veces.
+//
+// El selector "Simular reenvío" manda una segunda copia para la demo:
+//   - "key": misma key. Es el mismo intento repetido (doble click): el
+//     servidor devuelve la respuesta guardada y no lo aplica de nuevo.
+//   - "version": key nueva pero la misma expected_version. Es otra acción
+//     decidida sobre un estado viejo: el servidor la rechaza con 409.
+// La interfaz sigue con el resultado de la primera copia; la segunda solo
+// queda en el registro.
 async function command(method, path, body) {
   const key = newKey();
   const options = {
@@ -106,11 +117,21 @@ async function command(method, path, body) {
     headers: { "Content-Type": "application/json", "Idempotency-Key": key },
     body: body === undefined ? undefined : JSON.stringify(body),
   };
-  const copies = elements.doubleSend.checked ? 2 : 1;
-  let result;
-  for (let copy = 0; copy < copies; copy += 1) {
-    result = await sendWithRetry(method, path, options, key);
+  const result = await sendWithRetry(method, path, options, key);
+
+  if (state.resendMode === "key") {
+    await sendWithRetry(method, path, options, key);
+  } else if (state.resendMode === "version" && body?.expected_version !== undefined) {
+    const otherKey = newKey();
+    const copy = await sendWithRetry(method, path, {
+      ...options,
+      headers: { ...options.headers, "Idempotency-Key": otherKey },
+    }, otherKey);
+    if (copy.response.status === 409) {
+      logNote(`La copia traía la versión ${body.expected_version}, pero el partido ya iba por la ${copy.payload?.current_version}: 409, no se aplicó`);
+    }
   }
+
   const { response, payload } = result;
   if (!response.ok) {
     throw new HttpError(response.status, payload);
@@ -978,6 +999,23 @@ elements.rebuildButton.addEventListener("click", async () => {
 });
 
 elements.errorClose.addEventListener("click", clearError);
+
+const RESEND_HINTS = {
+  off: "Cada comando se manda una vez.",
+  key: "La copia es el mismo intento (como un doble click): lleva la misma Idempotency-Key y el servidor no la vuelve a aplicar.",
+  version: "La copia es otra acción decidida sobre el mismo estado: lleva otra key pero la misma versión del partido, y el servidor la rechaza con 409. Solo se aplica a los eventos de un partido.",
+};
+
+elements.resendModes.querySelectorAll("button").forEach((option) => {
+  option.addEventListener("click", () => {
+    state.resendMode = option.dataset.mode;
+    elements.resendModes.querySelectorAll("button").forEach((other) => {
+      other.classList.toggle("active", other === option);
+      other.setAttribute("aria-checked", String(other === option));
+    });
+    elements.resendHint.textContent = RESEND_HINTS[state.resendMode];
+  });
+});
 
 elements.requestLog.append(el("li", "log-empty", "Todavía no se mandó ningún comando. Probá registrar un gol."));
 
