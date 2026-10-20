@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -61,11 +62,16 @@ func idempotencyMiddleware(s *store.Store, next http.Handler) http.Handler {
 				writeError(w, http.StatusConflict, "una solicitud con esta Idempotency-Key sigue en curso")
 			default:
 				w.Header().Set("Idempotent-Replayed", "true")
-				if len(rec.Body) > 0 {
-					w.Header().Set("Content-Type", "application/json")
-				}
+				// La respuesta guardada es siempre JSON que generó esta app.
+				// Se valida igual antes de reenviarla y se fuerza el tipo
+				// para que el navegador nunca la interprete como HTML.
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
 				w.WriteHeader(rec.Status)
-				_, _ = w.Write(rec.Body)
+				var replay json.RawMessage
+				if json.Unmarshal(rec.Body, &replay) == nil {
+					_ = json.NewEncoder(w).Encode(replay)
+				}
 			}
 			return
 		}
