@@ -23,7 +23,7 @@ const state = {
   lastSnapshot: "",
 };
 
-const POLL_MS = 50000;
+const POLL_MS = 3000;
 
 const elements = {
   errorBanner: document.querySelector("#error-banner"),
