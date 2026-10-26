@@ -62,15 +62,26 @@ func TestRelojAutomaticoCorreMasRapido(t *testing.T) {
 	if got := m.ClockAt(at(500)); got != 30*60 {
 		t.Fatalf("después de pausar el reloj quedó en %d s, esperaba 1800", got)
 	}
-	if got := m.ClockAt(at(500)); got > MaxClockSec {
+	if got := m.ClockAt(at(500)); got > RegulationSec {
 		t.Fatalf("el reloj pasó el tope: %d", got)
 	}
 }
 
 func TestRelojNoPasaElTope(t *testing.T) {
 	m := play(t, ev(Event{Type: EventClockStarted, Speed: 600}, 0))
-	if got := m.ClockAt(at(3600)); got != MaxClockSec {
-		t.Fatalf("reloj = %d, esperaba el tope %d", got, MaxClockSec)
+	// 0-0: se va al alargue y corta en 120'.
+	if got := m.ClockAt(at(3600)); got != ExtraTimeSec {
+		t.Fatalf("reloj = %d, esperaba el tope %d", got, ExtraTimeSec)
+	}
+	// 1-0 antes del 90': corta en 90'.
+	m = play(t, ev(Event{Type: EventClockStarted, Speed: 60}, 0), ev(Event{Type: EventGoal, TeamID: 1}, 10))
+	if got := m.ClockAt(at(3600)); got != RegulationSec {
+		t.Fatalf("reloj = %d, esperaba el tope %d", got, RegulationSec)
+	}
+	// Gol en el alargue: el tope sigue en 120'.
+	m = play(t, ev(Event{Type: EventClockStarted, Speed: 60}, 0), ev(Event{Type: EventGoal, TeamID: 1}, 100))
+	if got := m.ClockAt(at(3600)); got != ExtraTimeSec {
+		t.Fatalf("reloj = %d, esperaba el tope %d", got, ExtraTimeSec)
 	}
 }
 
@@ -102,5 +113,12 @@ func TestRelojSoloAvanza(t *testing.T) {
 	e := Event{Type: EventClockAdvanced, AdvanceSec: -60}
 	if err := m.Stamp(&e, at(1), nil); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("avanzar con un valor negativo debería fallar, obtuve %v", err)
+	}
+}
+
+func TestExpulsadoNoPuedeTenerMasEventos(t *testing.T) {
+	m := play(t, ev(Event{Type: EventRedCard, TeamID: 1, PlayerID: 7}, 1))
+	if err := m.Check(Event{Type: EventGoal, TeamID: 1, PlayerID: 7, ClockSec: 0}); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("un expulsado no puede hacer goles, obtuve %v", err)
 	}
 }

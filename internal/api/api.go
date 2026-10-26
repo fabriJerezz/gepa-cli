@@ -332,7 +332,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "current_version": verr.Current})
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, store.ErrConflict):
+	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrTeamBusy):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusBadRequest, err.Error())

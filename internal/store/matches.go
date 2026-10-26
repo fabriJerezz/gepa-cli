@@ -13,6 +13,8 @@ package store
 //     la cola que consume el proyector.
 //   - "gepa:match:ids": set con los IDs de todos los partidos (para el
 //     rebuild y para chequear relaciones al borrar un equipo).
+//   - "gepa:team:{id}:match": último partido que empezó el equipo. Es el
+//     candado de "un partido en vivo por equipo" (ver claimTeams).
 
 import (
 	"context"
@@ -36,6 +38,11 @@ const (
 
 func matchStreamKey(id int) string { return fmt.Sprintf("gepa:match:%d:events", id) }
 
+func teamMatchKey(id int) string { return fmt.Sprintf("gepa:team:%d:match", id) }
+
+// ErrTeamBusy indica que un equipo ya está jugando otro partido.
+var ErrTeamBusy = errors.New("el equipo ya está jugando un partido")
+
 // ErrVersionConflict indica que el partido cambió desde la versión que el
 // cliente esperaba (control de concurrencia optimista).
 var ErrVersionConflict = errors.New("el partido cambió mientras tanto")
@@ -58,16 +65,18 @@ func (e *VersionError) Unwrap() error { return ErrVersionConflict }
 // (dos réplicas leyendo la versión 3 y escribiendo las dos la 4).
 //
 // KEYS: stream del partido, feed global, set de IDs.
-// ARGV: versión esperada, evento en JSON, ID del partido.
+// ARGV: versión esperada, ID del partido, uno o más eventos en JSON.
 var appendScript = redis.NewScript(`
 local current = redis.call('XLEN', KEYS[1])
 if current ~= tonumber(ARGV[1]) then
   return redis.error_reply('VERSION ' .. current)
 end
-redis.call('XADD', KEYS[1], '*', 'event', ARGV[2])
-redis.call('XADD', KEYS[2], '*', 'match_id', ARGV[3])
-redis.call('SADD', KEYS[3], ARGV[3])
-return current + 1
+for i = 3, #ARGV do
+  redis.call('XADD', KEYS[1], '*', 'event', ARGV[i])
+end
+redis.call('XADD', KEYS[2], '*', 'match_id', ARGV[2])
+redis.call('SADD', KEYS[3], ARGV[2])
+return current + #ARGV - 2
 `)
 
 // StartMatch crea un partido entre dos equipos existentes. Arranca en vivo
@@ -92,10 +101,67 @@ func (s *Store) StartMatch(ctx context.Context, teamAID, teamBID int) (model.Mat
 	if err != nil {
 		return model.Match{}, fmt.Errorf("generando id: %w", err)
 	}
+	if err := s.claimTeams(ctx, int(id), teamAID, teamBID); err != nil {
+		return model.Match{}, err
+	}
 	if err := s.appendEvent(ctx, int(id), 0, e); err != nil {
 		return model.Match{}, err
 	}
 	return model.Replay(int(id), []model.Event{e}), nil
+}
+
+// claimTeamsScript anota el partido nuevo en el candado de los dos equipos
+// SOLO si cada candado sigue con el valor que se leyó (compare-and-set).
+// Si otra réplica arrancó un partido en el medio, devuelve los valores
+// actuales para volver a evaluarlos.
+//
+// KEYS: candado del equipo A, candado del equipo B.
+// ARGV: valor esperado de A, valor esperado de B, ID del partido nuevo.
+var claimTeamsScript = redis.NewScript(`
+local a = redis.call('GET', KEYS[1]) or ''
+local b = redis.call('GET', KEYS[2]) or ''
+if a ~= ARGV[1] or b ~= ARGV[2] then
+  return {a, b}
+end
+redis.call('SET', KEYS[1], ARGV[3])
+redis.call('SET', KEYS[2], ARGV[3])
+return 'OK'
+`)
+
+// claimTeams reserva los dos equipos para el partido matchID. El candado de
+// cada equipo apunta a su último partido: si ese partido ya terminó, se
+// canceló o nunca llegó a guardarse, el candado está libre y se pisa. Así
+// no hace falta liberarlo al terminar (y un candado huérfano no traba al
+// equipo para siempre).
+func (s *Store) claimTeams(ctx context.Context, matchID int, teams ...int) error {
+	keys := []string{teamMatchKey(teams[0]), teamMatchKey(teams[1])}
+	expected := []any{"", ""}
+	for range 3 {
+		res, err := claimTeamsScript.Run(ctx, s.rdb, keys, expected[0], expected[1], matchID).Result()
+		if err != nil {
+			return fmt.Errorf("reservando equipos: %w", err)
+		}
+		current, ok := res.([]any)
+		if !ok {
+			return nil // "OK"
+		}
+		for i, raw := range current {
+			v, _ := raw.(string)
+			expected[i] = v
+			if v == "" {
+				continue
+			}
+			other, _ := strconv.Atoi(v)
+			m, err := s.LoadMatch(ctx, other)
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			if err == nil && m.Status == model.StatusLive {
+				return fmt.Errorf("equipo %d: %w (partido #%d)", teams[i], ErrTeamBusy, other)
+			}
+		}
+	}
+	return fmt.Errorf("reservando equipos: demasiados conflictos, reintentá")
 }
 
 // AppendEvent agrega un evento a un partido en juego. Si expectedVersion es
@@ -142,10 +208,20 @@ func (s *Store) AppendEvent(ctx context.Context, matchID, expectedVersion int, e
 		return model.Event{}, err
 	}
 
-	if err := s.appendEvent(ctx, matchID, m.Version, e); err != nil {
+	events := []model.Event{e}
+	if e.Type == model.EventYellowCard && e.PlayerID != 0 && m.YellowCards(e.PlayerID) == 1 {
+		// Doble amarilla: la roja se escribe en el mismo instante y en la
+		// misma operación atómica, así nunca queda una sin la otra.
+		red := e
+		red.Seq, red.Type = e.Seq+1, model.EventRedCard
+		events = append(events, red)
+	}
+
+	if err := s.appendEvent(ctx, matchID, m.Version, events...); err != nil {
 		return model.Event{}, err
 	}
-	return e, nil
+	// El último evento escrito: su Seq es la versión nueva del partido.
+	return events[len(events)-1], nil
 }
 
 // CancelMatch reemplaza al borrado: en Event Sourcing no se borra la
@@ -199,13 +275,17 @@ func (s *Store) loadEvents(ctx context.Context, id int) ([]model.Event, error) {
 	return events, nil
 }
 
-func (s *Store) appendEvent(ctx context.Context, matchID, expectedVersion int, e model.Event) error {
-	raw, err := json.Marshal(e)
-	if err != nil {
-		return fmt.Errorf("codificando evento: %w", err)
+func (s *Store) appendEvent(ctx context.Context, matchID, expectedVersion int, events ...model.Event) error {
+	args := []any{expectedVersion, matchID}
+	for _, e := range events {
+		raw, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("codificando evento: %w", err)
+		}
+		args = append(args, raw)
 	}
 	keys := []string{matchStreamKey(matchID), keyEventFeed, keyMatchIDs}
-	err = appendScript.Run(ctx, s.rdb, keys, expectedVersion, raw, matchID).Err()
+	err := appendScript.Run(ctx, s.rdb, keys, args...).Err()
 	if err != nil && strings.HasPrefix(err.Error(), "VERSION ") {
 		current, _ := strconv.Atoi(strings.TrimPrefix(err.Error(), "VERSION "))
 		return &VersionError{Expected: expectedVersion, Current: current}

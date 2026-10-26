@@ -281,13 +281,16 @@ func TestIdempotencyKeyNoDuplicaPartidos(t *testing.T) {
 		t.Fatalf("el reintento debería devolver la respuesta original: %q vs %q", second.Body.String(), first.Body.String())
 	}
 
-	// Una key nueva sí es un partido nuevo (dos partidos reales A vs B).
-	doRequestWithKey(t, h, http.MethodPost, "/matches", body, "clave-2")
+	// Una key nueva sí es otro intento de partido: como A y B ya están
+	// jugando, se rechaza con 409.
+	if rec := doRequestWithKey(t, h, http.MethodPost, "/matches", body, "clave-2"); rec.Code != http.StatusConflict {
+		t.Fatalf("otro partido con equipos en juego: status = %d, esperaba 409", rec.Code)
+	}
 	_, _ = s.Rebuild(context.Background())
 	var matches []map[string]any
 	_ = json.Unmarshal(doRequest(t, h, http.MethodGet, "/matches", nil).Body.Bytes(), &matches)
-	if len(matches) != 2 {
-		t.Fatalf("esperaba 2 partidos (clave-1 una vez + clave-2), obtuve %d", len(matches))
+	if len(matches) != 1 {
+		t.Fatalf("esperaba 1 partido, obtuve %d", len(matches))
 	}
 }
 

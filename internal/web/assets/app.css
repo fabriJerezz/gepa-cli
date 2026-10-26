@@ -448,6 +448,12 @@ select option {
   background: rgba(246, 239, 217, 0.06);
 }
 
+.topnav a[aria-current="page"] {
+  color: var(--chalk);
+  background: var(--floodlight-soft);
+  box-shadow: inset 0 -2px 0 var(--floodlight);
+}
+
 .instance-pill {
   display: flex;
   align-items: center;
@@ -492,6 +498,10 @@ select option {
   max-width: 1320px;
   margin: 0 auto;
   padding: 32px 24px 48px;
+}
+
+.view[hidden] {
+  display: none !important;
 }
 
 .layout {
@@ -754,6 +764,45 @@ select option {
   75% { top: 72%; left: 80%; }
   90% { top: 40%; left: 88%; }
   100% { top: 50%; left: 50%; }
+}
+
+/* Tribunas: una franja de público arriba y otra abajo de la cancha. Cada
+   capa de puntos es una fila de cabezas; saltan desfasadas mientras corre
+   el reloj. */
+.stand {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 16px;
+  background-color: var(--stand);
+  background-image:
+    radial-gradient(circle, var(--chalk-3) 1.6px, transparent 2.2px),
+    radial-gradient(circle, var(--floodlight) 1.6px, transparent 2.2px),
+    radial-gradient(circle, var(--card-red) 1.6px, transparent 2.2px);
+  background-size: 18px 8px, 18px 8px, 18px 8px;
+  background-position: 0 0, 6px 4px, 12px 0;
+  animation: crowd 700ms ease-in-out infinite alternate;
+}
+
+.stand-top {
+  top: 0;
+  box-shadow: inset 0 -2px 0 var(--seam-strong);
+}
+
+.stand-bottom {
+  bottom: 0;
+  box-shadow: inset 0 2px 0 var(--seam-strong);
+  animation-delay: -350ms;
+}
+
+@keyframes crowd {
+  to { background-position: 0 -2px, 6px 3px, 12px -1px; }
+}
+
+/* La cancha se achica para dejarles lugar a las tribunas. */
+.with-stands .pitch-lines {
+  top: 16px;
+  height: calc(100% - 32px);
 }
 
 /* --- Animaciones de eventos --------------------------------------------- */
@@ -1996,8 +2045,8 @@ select option {
 }
 
 @media (max-width: 980px) {
-  /* Una sola columna, en el orden en que se usa durante un partido:
-     en vivo, tabla, resultados, planteles y registro. */
+  /* Una sola columna por vista: la tabla arriba de los resultados y el
+     registro debajo del partido en vivo. */
   .layout {
     display: flex;
     flex-direction: column;
@@ -2010,35 +2059,28 @@ select option {
     display: contents;
   }
 
-  #en-vivo {
-    order: 1;
-  }
-
   #tabla {
-    order: 2;
-  }
-
-  #resultados {
-    order: 3;
-  }
-
-  #planteles {
-    order: 4;
-  }
-
-  #registro {
-    order: 5;
+    order: -1;
   }
 }
 
 @media (max-width: 720px) {
+  /* La navegación baja a una segunda fila: es la única forma de cambiar
+     de vista. */
   .topbar-inner {
-    gap: 12px;
-    height: 56px;
-    padding: 0 16px;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    height: auto;
+    padding: 10px 16px 6px;
   }
 
-  .topnav,
+  .topnav {
+    order: 1;
+    width: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+  }
+
   .brand-tag {
     display: none;
   }

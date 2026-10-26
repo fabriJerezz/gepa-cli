@@ -18,10 +18,12 @@ const state = {
   // cada gol o tarjeta nuevos, vengan de esta pestaña o de otra.
   seenVersion: new Map(),
   animations: new Map(),
+  // Partidos que esta pestaña ya mandó a cerrar al cumplirse el tiempo.
+  finishing: new Set(),
   lastSnapshot: "",
 };
 
-const POLL_MS = 3000;
+const POLL_MS = 50000;
 
 const elements = {
   errorBanner: document.querySelector("#error-banner"),
@@ -417,12 +419,16 @@ function fillTeamSelect(select, placeholderText) {
   placeholder.disabled = true;
   placeholder.selected = true;
   select.append(placeholder);
+  // Un equipo juega un solo partido a la vez: los que están en vivo no se
+  // pueden elegir (el servidor igual lo rechaza con 409).
+  const busy = new Set(state.matches.filter((match) => match.status === "live").flatMap((match) => [match.team_a_id, match.team_b_id]));
   state.teams.forEach((team) => {
-    const option = el("option", "", team.name);
+    const option = el("option", "", busy.has(team.id) ? `${team.name} (jugando)` : team.name);
     option.value = String(team.id);
+    option.disabled = busy.has(team.id);
     select.append(option);
   });
-  if (state.teams.some((team) => String(team.id) === previous)) {
+  if (state.teams.some((team) => String(team.id) === previous && !busy.has(team.id))) {
     select.value = previous;
   }
 }
@@ -435,7 +441,8 @@ function renderTeamOptions() {
 
 /* --- Reloj del partido ---------------------------------------------------- */
 
-const MAX_CLOCK_SEC = 130 * 60;
+const REGULATION_SEC = 90 * 60;
+const EXTRA_TIME_SEC = 120 * 60;
 const SPEEDS = [10, 30, 60, 120];
 
 // serverNow es la hora del servidor estimada con la cabecera X-Server-Time:
@@ -455,7 +462,18 @@ function clockAt(match, nowMs = serverNow()) {
       sec += Math.floor(((nowMs - since) / 1000) * match.clock_speed);
     }
   }
-  return Math.min(sec, MAX_CLOCK_SEC);
+  return Math.min(sec, limitSec(match));
+}
+
+// limitSec replica model.Match.LimitSec: 120' si va empatado o ya se pasó
+// del 90', 90' si no.
+function limitSec(match) {
+  return match.score_a === match.score_b || match.clock_sec > REGULATION_SEC ? EXTRA_TIME_SEC : REGULATION_SEC;
+}
+
+// sentOff: jugadores expulsados en el partido (no pueden tener más eventos).
+function sentOff(match) {
+  return new Set(match.events.filter((event) => event.type === "red_card" && event.player_id).map((event) => event.player_id));
 }
 
 function formatClock(sec) {
@@ -467,7 +485,8 @@ function minuteLabel(sec) {
 }
 
 // tickClocks actualiza los relojes visibles cuatro veces por segundo sin
-// redibujar el resto de la pantalla.
+// redibujar el resto de la pantalla, y cierra los partidos que cumplieron el
+// tiempo.
 function tickClocks() {
   document.querySelectorAll("[data-clock-match]").forEach((node) => {
     const match = state.matches.find((candidate) => candidate.id === Number(node.dataset.clockMatch));
@@ -475,6 +494,13 @@ function tickClocks() {
       node.textContent = formatClock(clockAt(match));
     }
   });
+  state.matches
+    .filter((match) => match.status === "live" && clockAt(match) >= limitSec(match) && !state.finishing.has(match.id))
+    .forEach((match) => {
+      state.finishing.add(match.id);
+      // Si otra pestaña lo cerró primero, el servidor rechaza este: no es error.
+      sendEvent(match, { type: "match_finished" }).catch(() => refresh().catch(() => {}));
+    });
 }
 
 /* --- Partidos ------------------------------------------------------------- */
@@ -591,7 +617,9 @@ function pitchLayer(match) {
   ].forEach((shape) => lines.append(shape));
   layer.append(lines, el("span", "pitch-shade"));
   if (clockIsRunning(match)) {
-    layer.append(el("span", "pitch-ball"));
+    // Con la simulación en marcha se llenan las tribunas de los costados.
+    layer.classList.add("with-stands");
+    layer.append(el("span", "pitch-ball"), el("span", "stand stand-top"), el("span", "stand stand-bottom"));
   }
   return layer;
 }
@@ -606,7 +634,7 @@ function detectNewEvents(live) {
     if (seen === undefined) {
       return;
     }
-    const fresh = match.events.filter((event) => event.seq > seen && ANIMATION_MS[event.type]);
+    // const fresh = match.events.filter((event) => event.seq > seen && ANIMATION_MS[event.type]);
     if (fresh.length) {
       state.animations.set(match.id, { event: fresh[fresh.length - 1], start: performance.now() });
     }
@@ -643,9 +671,9 @@ function burst(match, event, elapsed) {
   return overlay;
 }
 
-// clockIsRunning: el reloj corre y todavía no llegó al tope de 130'.
+// clockIsRunning: el reloj corre y todavía no llegó al tope (90' o 120').
 function clockIsRunning(match) {
-  return match.clock_running && clockAt(match) < MAX_CLOCK_SEC;
+  return match.clock_running && clockAt(match) < limitSec(match);
 }
 
 function matchClock(match) {
@@ -654,7 +682,7 @@ function matchClock(match) {
   value.dataset.clockMatch = String(match.id);
   value.setAttribute("aria-label", "Tiempo de partido");
   let status = match.clock_running ? `En marcha · x${match.clock_speed}` : "Reloj en pausa";
-  if (clockAt(match) >= MAX_CLOCK_SEC) {
+  if (clockAt(match) >= limitSec(match)) {
     status = "Tiempo cumplido";
   }
   box.append(value, el("span", "clock-status", status));
@@ -666,7 +694,7 @@ function matchClock(match) {
 function clockControls(match) {
   const draft = state.drafts.get(`clock-${match.id}`) || { speed: 60 };
   state.drafts.set(`clock-${match.id}`, draft);
-  const atLimit = clockAt(match) >= MAX_CLOCK_SEC;
+  const atLimit = clockAt(match) >= limitSec(match);
 
   const row = el("div", "clock-controls");
 
@@ -770,8 +798,9 @@ function whoPicker(match, pending) {
   box.append(head, el("p", "picker-question", pending.type === "goal" ? "¿Quién hizo el gol?" : "¿Quién recibió la tarjeta?"));
 
   const chips = el("div", "player-chips");
+  const expelled = sentOff(match);
   state.players
-    .filter((player) => player.team_id === pending.teamId)
+    .filter((player) => player.team_id === pending.teamId && !expelled.has(player.id))
     .forEach((player) => chips.append(button(player.name, "chip", () => record(player.id))));
   chips.append(button("Sin especificar", "chip chip-muted", () => record(0)));
   box.append(chips);
@@ -1018,6 +1047,30 @@ elements.resendModes.querySelectorAll("button").forEach((option) => {
 });
 
 elements.requestLog.append(el("li", "log-empty", "Todavía no se mandó ningún comando. Probá registrar un gol."));
+
+/* --- Vistas ------------------------------------------------------------ */
+
+// showView muestra la vista del #hash (En vivo si no hay o no existe). Las
+// vistas son solo HTML ya cargado: cambiar de vista no pide nada al servidor.
+function showView() {
+  const views = [...document.querySelectorAll("[data-view]")];
+  const name = location.hash.slice(1);
+  const current = views.find((view) => view.dataset.view === name) || views[0];
+  views.forEach((view) => {
+    view.hidden = view !== current;
+  });
+  document.querySelectorAll(".topnav a").forEach((link) => {
+    if (link.hash === `#${current.dataset.view}`) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  });
+  window.scrollTo(0, 0);
+}
+
+window.addEventListener("hashchange", showView);
+showView();
 
 poll();
 setInterval(tickClocks, 250);

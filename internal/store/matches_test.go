@@ -215,3 +215,42 @@ func TestIdempotencyKeyStore(t *testing.T) {
 		t.Fatalf("después de liberar, la key debería poder reservarse de nuevo: %+v", rec)
 	}
 }
+
+func TestDobleAmarillaEsRoja(t *testing.T) {
+	s, m, messi := setupMatch(t)
+	ctx := context.Background()
+
+	mustAppend(t, s, m.ID, model.Event{Type: model.EventYellowCard, PlayerID: messi.ID})
+	mustAppend(t, s, m.ID, model.Event{Type: model.EventYellowCard, PlayerID: messi.ID})
+
+	got, err := s.LoadMatch(ctx, m.ID)
+	if err != nil {
+		t.Fatalf("LoadMatch: %v", err)
+	}
+	last := got.Events[len(got.Events)-1]
+	if last.Type != model.EventRedCard || last.PlayerID != messi.ID || got.Version != 4 {
+		t.Fatalf("la segunda amarilla debería sumar una roja, último evento %+v (v%d)", last.Event, got.Version)
+	}
+	if _, err := s.AppendEvent(ctx, m.ID, -1, model.Event{Type: model.EventGoal, PlayerID: messi.ID}, nil); !errors.Is(err, model.ErrInvalidEvent) {
+		t.Fatalf("un expulsado no puede hacer goles, obtuve %v", err)
+	}
+}
+
+func TestUnPartidoEnVivoPorEquipo(t *testing.T) {
+	s, m, _ := setupMatch(t)
+	ctx := context.Background()
+	c, _ := s.AddTeam(ctx, "Brasil")
+
+	if _, err := s.StartMatch(ctx, m.TeamAID, m.TeamBID); !errors.Is(err, ErrTeamBusy) {
+		t.Fatalf("mismos equipos en juego: esperaba ErrTeamBusy, obtuve %v", err)
+	}
+	if _, err := s.StartMatch(ctx, c.ID, m.TeamBID); !errors.Is(err, ErrTeamBusy) {
+		t.Fatalf("un equipo en juego: esperaba ErrTeamBusy, obtuve %v", err)
+	}
+
+	// Al terminar el partido, los equipos quedan libres.
+	mustAppend(t, s, m.ID, model.Event{Type: model.EventMatchFinished})
+	if _, err := s.StartMatch(ctx, c.ID, m.TeamBID); err != nil {
+		t.Fatalf("con el partido terminado debería poder jugar otro: %v", err)
+	}
+}

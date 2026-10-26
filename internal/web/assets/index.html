@@ -20,9 +20,8 @@
         </a>
         <nav class="topnav" aria-label="Secciones">
           <a href="#en-vivo">En vivo</a>
-          <a href="#tabla">Tabla</a>
+          <a href="#resultados">Resultados</a>
           <a href="#planteles">Planteles</a>
-          <a href="#registro">Registro</a>
         </nav>
         <div class="instance-pill" aria-live="polite" title="Réplica que atendió la última request (cabecera X-Instance)">
           <span class="status-dot" aria-hidden="true"></span>
@@ -33,37 +32,99 @@
     </header>
 
     <div class="app-shell">
-      <main class="layout">
-        <div class="main-column">
-          <section id="en-vivo" class="section" aria-labelledby="live-title">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Marcador electrónico</p>
-                <h1 id="live-title" class="section-title">En vivo <span id="live-count" class="count-chip">0</span></h1>
+      <main>
+        <!-- Vistas: una sola visible a la vez, según el #hash de la URL. -->
+        <div class="view layout" data-view="en-vivo">
+          <div class="main-column">
+            <section id="en-vivo" class="section" aria-labelledby="live-title">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Marcador electrónico</p>
+                  <h1 id="live-title" class="section-title">En vivo <span id="live-count" class="count-chip">0</span></h1>
+                </div>
+                <form id="match-form" class="kickoff" aria-label="Iniciar partido">
+                  <label class="sr-only" for="team-a">Equipo local</label>
+                  <select id="team-a" name="team_a_id" required></select>
+                  <span class="kickoff-vs" aria-hidden="true">vs</span>
+                  <label class="sr-only" for="team-b">Equipo visitante</label>
+                  <select id="team-b" name="team_b_id" required></select>
+                  <button id="match-submit" type="submit" class="btn btn-primary" disabled>Iniciar partido</button>
+                </form>
               </div>
-              <form id="match-form" class="kickoff" aria-label="Iniciar partido">
-                <label class="sr-only" for="team-a">Equipo local</label>
-                <select id="team-a" name="team_a_id" required></select>
-                <span class="kickoff-vs" aria-hidden="true">vs</span>
-                <label class="sr-only" for="team-b">Equipo visitante</label>
-                <select id="team-b" name="team_b_id" required></select>
-                <button id="match-submit" type="submit" class="btn btn-primary" disabled>Iniciar partido</button>
-              </form>
-            </div>
-            <p class="section-hint">Cada gol, tarjeta o anulación es un evento. El marcador y la tabla se calculan a partir de ellos.</p>
-            <div id="live-list" class="live-list" aria-live="polite"></div>
-          </section>
+              <p class="section-hint">Cada gol, tarjeta o anulación es un evento. El marcador y la tabla se calculan a partir de ellos.</p>
+              <div id="live-list" class="live-list" aria-live="polite"></div>
+            </section>
+          </div>
 
-          <section id="resultados" class="section" aria-labelledby="results-title">
-            <div class="section-head">
-              <div>
-                <p class="eyebrow">Partidos finalizados</p>
-                <h2 id="results-title" class="section-title section-title-sm">Resultados <span id="results-count" class="count-chip">0</span></h2>
+          <aside class="side-column" aria-label="Registro">
+            <section id="registro" class="panel" aria-labelledby="log-title">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Qué réplica atendió cada comando</p>
+                  <h2 id="log-title" class="panel-title">Registro de requests</h2>
+                </div>
               </div>
-            </div>
-            <div id="results-list" class="results-list"></div>
-          </section>
+              <div class="resend">
+                <p class="resend-title" id="resend-title">Simular reenvío</p>
+                <div id="resend-modes" class="segmented resend-modes" role="radiogroup" aria-labelledby="resend-title">
+                  <button type="button" role="radio" data-mode="off" class="active" aria-checked="true">Apagado</button>
+                  <button type="button" role="radio" data-mode="key" aria-checked="false">Misma key</button>
+                  <button type="button" role="radio" data-mode="version" aria-checked="false">Misma versión</button>
+                </div>
+                <p id="resend-hint" class="resend-hint">Cada comando se manda una vez.</p>
+              </div>
+              <ol id="request-log" class="request-log" aria-live="polite"></ol>
+            </section>
+          </aside>
+        </div>
 
+        <div class="view layout" data-view="resultados" hidden>
+          <div class="main-column">
+            <section id="resultados" class="section" aria-labelledby="results-title">
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">Partidos finalizados</p>
+                  <h2 id="results-title" class="section-title section-title-sm">Resultados <span id="results-count" class="count-chip">0</span></h2>
+                </div>
+              </div>
+              <div id="results-list" class="results-list"></div>
+            </section>
+          </div>
+
+          <aside class="side-column" aria-label="Tabla">
+            <section id="tabla" class="panel" aria-labelledby="standings-title">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Modelo de lectura · GET /standings</p>
+                  <h2 id="standings-title" class="panel-title">Tabla de posiciones</h2>
+                </div>
+                <button id="rebuild-button" type="button" class="btn btn-ghost btn-sm" title="Borra la tabla y la recalcula leyendo todos los eventos">Reconstruir</button>
+              </div>
+              <div class="table-scroll">
+                <table class="standings-table">
+                  <thead>
+                    <tr>
+                      <th scope="col" class="pos-col"><span class="sr-only">Posición</span>#</th>
+                      <th scope="col" class="team-col">Equipo</th>
+                      <th scope="col"><abbr title="Partidos jugados">PJ</abbr></th>
+                      <th scope="col"><abbr title="Ganados">G</abbr></th>
+                      <th scope="col"><abbr title="Empatados">E</abbr></th>
+                      <th scope="col"><abbr title="Perdidos">P</abbr></th>
+                      <th scope="col" class="hide-narrow"><abbr title="Goles a favor">GF</abbr></th>
+                      <th scope="col" class="hide-narrow"><abbr title="Goles en contra">GC</abbr></th>
+                      <th scope="col"><abbr title="Diferencia de gol">DG</abbr></th>
+                      <th scope="col" class="points-col"><abbr title="Puntos">Pts</abbr></th>
+                    </tr>
+                  </thead>
+                  <tbody id="standings-body"></tbody>
+                </table>
+              </div>
+              <p class="panel-note">Solo suman los partidos finalizados. 3 puntos por victoria, 1 por empate.</p>
+            </section>
+          </aside>
+        </div>
+
+        <div class="view" data-view="planteles" hidden>
           <section id="planteles" class="section pitch-section" aria-labelledby="squads-title">
             <div class="section-head">
               <div>
@@ -76,58 +137,6 @@
             </div>
           </section>
         </div>
-
-        <aside class="side-column" aria-label="Tabla y registro">
-          <section id="tabla" class="panel" aria-labelledby="standings-title">
-            <div class="panel-head">
-              <div>
-                <p class="eyebrow">Modelo de lectura · GET /standings</p>
-                <h2 id="standings-title" class="panel-title">Tabla de posiciones</h2>
-              </div>
-              <button id="rebuild-button" type="button" class="btn btn-ghost btn-sm" title="Borra la tabla y la recalcula leyendo todos los eventos">Reconstruir</button>
-            </div>
-            <div class="table-scroll">
-              <table class="standings-table">
-                <thead>
-                  <tr>
-                    <th scope="col" class="pos-col"><span class="sr-only">Posición</span>#</th>
-                    <th scope="col" class="team-col">Equipo</th>
-                    <th scope="col"><abbr title="Partidos jugados">PJ</abbr></th>
-                    <th scope="col"><abbr title="Ganados">G</abbr></th>
-                    <th scope="col"><abbr title="Empatados">E</abbr></th>
-                    <th scope="col"><abbr title="Perdidos">P</abbr></th>
-                    <th scope="col" class="hide-narrow"><abbr title="Goles a favor">GF</abbr></th>
-                    <th scope="col" class="hide-narrow"><abbr title="Goles en contra">GC</abbr></th>
-                    <th scope="col"><abbr title="Diferencia de gol">DG</abbr></th>
-                    <th scope="col" class="points-col"><abbr title="Puntos">Pts</abbr></th>
-                  </tr>
-                </thead>
-                <tbody id="standings-body"></tbody>
-              </table>
-            </div>
-            <p class="panel-note">Solo suman los partidos finalizados. 3 puntos por victoria, 1 por empate.</p>
-          </section>
-
-          <section id="registro" class="panel" aria-labelledby="log-title">
-            <div class="panel-head">
-              <div>
-                <p class="eyebrow">Qué réplica atendió cada comando</p>
-                <h2 id="log-title" class="panel-title">Registro de requests</h2>
-              </div>
-            </div>
-            <div class="resend">
-              <p class="resend-title" id="resend-title">Simular reenvío</p>
-              <div id="resend-modes" class="segmented resend-modes" role="radiogroup" aria-labelledby="resend-title">
-                <button type="button" role="radio" data-mode="off" class="active" aria-checked="true">Apagado</button>
-                <button type="button" role="radio" data-mode="key" aria-checked="false">Misma key</button>
-                <button type="button" role="radio" data-mode="version" aria-checked="false">Misma versión</button>
-              </div>
-              <p id="resend-hint" class="resend-hint">Cada comando se manda una vez.</p>
-            </div>
-            <ol id="request-log" class="request-log" aria-live="polite"></ol>
-          </section>
-        </aside>
-
       </main>
 
       <footer class="site-footer">

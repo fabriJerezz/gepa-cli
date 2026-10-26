@@ -26,8 +26,11 @@ const (
 	EventClockAdvanced EventType = "clock_advanced"
 )
 
-// MaxClockSec es el tope del reloj: 130 minutos (90 + alargue + descuentos).
-const MaxClockSec = 130 * 60
+// Duración del partido: 90 minutos, o 120 si a los 90 van empatados.
+const (
+	RegulationSec = 90 * 60
+	ExtraTimeSec  = 120 * 60
+)
 
 // MatchStatus es el estado del ciclo de vida de un partido.
 type MatchStatus string
@@ -105,7 +108,39 @@ func (m Match) ClockAt(t time.Time) int {
 	if m.ClockRunning && t.After(m.ClockSince) {
 		sec += int(t.Sub(m.ClockSince).Seconds() * float64(m.ClockSpeed))
 	}
-	return min(sec, MaxClockSec)
+	return min(sec, m.LimitSec())
+}
+
+// LimitSec es el tope del reloj: 120' si va empatado o si ya se pasó del
+// 90' (el alargue se juega entero aunque se desempate), 90' si no.
+// ClockSec es el último instante fijado por un evento, así que un gol en el
+// alargue no puede "bajar" el tope a 90'.
+func (m Match) LimitSec() int {
+	if m.ScoreA == m.ScoreB || m.ClockSec > RegulationSec {
+		return ExtraTimeSec
+	}
+	return RegulationSec
+}
+
+// YellowCards cuenta las amarillas de un jugador en el partido.
+func (m Match) YellowCards(playerID int) int {
+	n := 0
+	for _, e := range m.Events {
+		if e.Type == EventYellowCard && e.PlayerID == playerID {
+			n++
+		}
+	}
+	return n
+}
+
+// SentOff dice si el jugador ya fue expulsado.
+func (m Match) SentOff(playerID int) bool {
+	for _, e := range m.Events {
+		if e.Type == EventRedCard && e.PlayerID == playerID {
+			return true
+		}
+	}
+	return false
 }
 
 // Stamp fija el tiempo de partido de un evento nuevo registrado en el
@@ -122,10 +157,10 @@ func (m Match) Stamp(e *Event, now time.Time, atClock *int) error {
 		if e.AdvanceSec <= 0 {
 			return fmt.Errorf("%w: el reloj solo puede avanzar", ErrInvalidEvent)
 		}
-		if clock >= MaxClockSec {
-			return fmt.Errorf("%w: el reloj ya llegó al tope de %d minutos", ErrInvalidEvent, MaxClockSec/60)
+		if clock >= m.LimitSec() {
+			return fmt.Errorf("%w: el reloj ya llegó al tope de %d minutos", ErrInvalidEvent, m.LimitSec()/60)
 		}
-		e.ClockSec = min(clock+e.AdvanceSec, MaxClockSec)
+		e.ClockSec = min(clock+e.AdvanceSec, m.LimitSec())
 	case atClock != nil:
 		if *atClock < m.LastEventSec {
 			return fmt.Errorf("%w: no se puede anotar antes del último evento (%s)", ErrInvalidEvent, FormatClock(m.LastEventSec))
@@ -215,7 +250,7 @@ func (m Match) Check(e Event) error {
 	}
 	// El tiempo de partido nunca retrocede (Stamp ya lo garantiza; esto
 	// protege contra cualquier otro camino de escritura).
-	if e.ClockSec < m.LastEventSec || e.ClockSec > MaxClockSec {
+	if e.ClockSec < m.LastEventSec || e.ClockSec > m.LimitSec() {
 		return fmt.Errorf("%w: el evento quedaría antes del último (%s)", ErrInvalidEvent, FormatClock(m.LastEventSec))
 	}
 
@@ -237,6 +272,9 @@ func (m Match) Check(e Event) error {
 	case EventGoal, EventYellowCard, EventRedCard:
 		if e.TeamID != m.TeamAID && e.TeamID != m.TeamBID {
 			return fmt.Errorf("%w: el equipo %d no juega este partido", ErrInvalidEvent, e.TeamID)
+		}
+		if e.PlayerID != 0 && m.SentOff(e.PlayerID) {
+			return fmt.Errorf("%w: el jugador %d fue expulsado", ErrInvalidEvent, e.PlayerID)
 		}
 	case EventGoalAnnulled:
 		if e.RefSeq < 1 || e.RefSeq > len(m.Events) || m.Events[e.RefSeq-1].Type != EventGoal {
