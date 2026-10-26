@@ -634,7 +634,7 @@ function detectNewEvents(live) {
     if (seen === undefined) {
       return;
     }
-    // const fresh = match.events.filter((event) => event.seq > seen && ANIMATION_MS[event.type]);
+    const fresh = match.events.filter((event) => event.seq > seen && ANIMATION_MS[event.type]);
     if (fresh.length) {
       state.animations.set(match.id, { event: fresh[fresh.length - 1], start: performance.now() });
     }
